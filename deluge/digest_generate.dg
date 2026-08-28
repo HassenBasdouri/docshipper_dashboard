@@ -1,111 +1,141 @@
 // digest_generate.dg — nightly step 2 (runs immediately after digest_collect.dg).
 //
-// The ONLY LLM call in the whole daily pipeline. Takes the deterministic Map from step 1 and
-// asks Claude for just the judgment-requiring text: dispatch/follow-up note wording (C2ter
-// style), B2B Lost heat + "why lost" narrative, and the "où ça en est" chat-tail summaries
-// (D4bis). Everything else in the final JSON was already decided in step 1 without touching
-// an LLM.
+// Loops over every active user (Digest_active_users org variable, hand-maintained — see
+// ../deluge/README.md), calls digest_collect for each, branches to that user's profile-specific
+// generator, and writes ONE shared registry org variable (Digest_registry) pointing every user
+// at their own latest digest. Replaces the old single-user version of this file, which called
+// Claude once for Alexis alone and wrote one global Digest_url variable.
 //
-// Cost levers used here (see ANALYSIS.md §3):
-//  - System prompt is split into a STABLE block (house rules, never changes day to day) with
-//    cache_control so Anthropic serves it at cache-read pricing on every day after the first,
-//    and a small DYNAMIC block (today's collected facts) that's never cached.
-//  - Model defaults to claude-opus-5. This is the single largest cost lever in this job if
-//    output quality holds at a cheaper tier (e.g. claude-sonnet-5) — that's a deliberate
-//    tradeoff for the team to make, not something to change silently; swap MODEL_ID below only
-//    on an explicit decision.
-//  - One call, structured JSON output — no sub-agents, no free-written HTML.
+// Each user's profile is re-fetched live here (never trusted from a cached value) before
+// branching — same "never trust yesterday's snapshot" convention this repo already applies to
+// owner ids (see ../CLAUDE.md's "Conventions" section).
 //
 // TODO before first real run: store the Anthropic API key as a secure custom variable /
 // Connection rather than inline; confirm invokeurl is allowed to api.anthropic.com on this org
 // (Zoho's "Allowed URLs" allowlist may need updating); verify Deluge's exact JSON<->Map
 // conversion built-ins available on this Deluge runtime version (used loosely below as
-// `.toMap()` / `.toJSON()`).
+// `.toMap()` / `.toJSON()`); confirm the exact Deluge task name for reading/updating an org
+// variable, and confirm try/catch is supported the way it's used below.
 
-collected = digest_collect(); // TODO: replace with the actual chaining mechanism you deploy (see deluge/README.md)
+activeUsersRaw = zoho.crm.getOrgVariable("Digest_active_users"); // hand-maintained JSON array [{id, name}]
+activeUsers = activeUsersRaw.toMap(); // TODO: confirm this parses to a List, not a Map, on this runtime — adjust to .toList() if needed
 
-MODEL_ID = "claude-opus-5";
-ANTHROPIC_API_KEY = zoho.crm.getOrgVariable("Anthropic_api_key"); // store as an org variable, not inline
-ANTHROPIC_VERSION = "2023-06-01";
+registryRaw = zoho.crm.getOrgVariable("Digest_registry");
+registry = (registryRaw != null && registryRaw != "") ? registryRaw.toMap() : Map();
 
-stableSystemPrompt = zoho.crm.getOrgVariable("Digest_house_rules_v24_1"); // paste the static v24.1 rulebook text in as an org variable once, so this file never embeds 632 lines inline
+for each activeUser in activeUsers {
+	userId = activeUser.get("id");
+	profileName = getUserProfile(userId); // live lookup, never cached — see digest_actions.dg's getUserProfile helper
 
-systemBlocks = List();
-stableBlock = Map();
-stableBlock.put("type", "text");
-stableBlock.put("text", stableSystemPrompt);
-cacheControl = Map();
-cacheControl.put("type", "ephemeral");
-stableBlock.put("cache_control", cacheControl);
-systemBlocks.add(stableBlock);
+	try {
+		collected = digest_collect(userId);
 
-userContent = "Voici les faits du jour, déjà triés (D1-D8) et vérifiés par requête CRM fraîche. "
-	+ "Pour chaque item, rédige uniquement le texte demandé (note de dispatch C2ter, "
-	+ "\"où ça en est\" D4bis, raison de perte B2B Lost) et renvoie UNIQUEMENT un objet JSON, "
-	+ "sans texte autour, respectant exactement ce schéma : "
-	+ "{\"initial\":[{\"deal_id\":\"\",\"note\":\"\",\"gold_estimate\":\"\"}],"
-	+ "\"voie1\":[{\"deal_id\":\"\",\"passe\":[],\"propose\":\"\",\"note\":\"\"}],"
-	+ "\"voie2\":[...même forme...],"
-	+ "\"supervision_rows\":[{\"deal_id\":\"\",\"ou_ca_en_est_line\":\"\",\"ou_ca_en_est_waiting\":\"\"}],"
-	+ "\"b2b_lost_redispatch\":[{\"deal_id\":\"\",\"heat\":\"\",\"why_lost\":\"\",\"angle\":\"\",\"note\":\"\"}]}"
-	+ "\n\nFaits du jour (JSON) :\n" + collected.toJSON();
+		if (profileName == "Sales Manager") {
+			meta = digest_generate_sales_manager(userId, collected);
+		} else if (profileName == "004-SALES") {
+			meta = digest_generate_004_sales(userId, collected);
+		} else {
+			meta = digest_generate_stub(userId, collected, profileName);
+		}
 
-messages = List();
-userMsg = Map();
-userMsg.put("role", "user");
-userMsg.put("content", userContent);
-messages.add(userMsg);
-
-requestBody = Map();
-requestBody.put("model", MODEL_ID);
-requestBody.put("max_tokens", 16000);
-requestBody.put("system", systemBlocks);
-requestBody.put("messages", messages);
-outputConfig = Map();
-outputConfig.put("effort", "high");
-requestBody.put("output_config", outputConfig);
-
-headers = Map();
-headers.put("x-api-key", ANTHROPIC_API_KEY);
-headers.put("anthropic-version", ANTHROPIC_VERSION);
-headers.put("content-type", "application/json");
-
-response = invokeurl
-[
-	url: "https://api.anthropic.com/v1/messages"
-	type: POST
-	parameters: requestBody.toString()
-	headers: headers
-];
-
-// Verify caching worked (should read a large cache_read_input_tokens after day 1):
-info "cache_read_input_tokens: " + response.get("usage").get("cache_read_input_tokens");
-info "cache_creation_input_tokens: " + response.get("usage").get("cache_creation_input_tokens");
-
-contentBlocks = response.get("content");
-writtenText = "";
-for each block in contentBlocks {
-	if (block.get("type") == "text") { writtenText = block.get("text"); }
+		registry.put(userId, meta);
+		info "Digest published for " + userId + " (" + profileName + "): " + meta.get("url");
+	} catch (e) {
+		// Last-good stays: on failure, leave this user's existing registry entry untouched rather
+		// than clobbering it with nothing — matches the widget's own staleness-banner design
+		// (app/js/digestLoader.js's isStale), which already handles a digest that's a day old.
+		info "Digest generation FAILED for " + userId + " (" + profileName + "): " + e;
+	}
 }
-written = writtenText.toMap(); // parse the model's structured JSON output
 
-// --- Merge step 1's facts with step 2's text into the final digest JSON (ANALYSIS.md §4). ---
-finalDigest = mergeCollectedAndWritten(collected, written); // TODO: implement the merge — walk each
-	// section of `collected`, look up the matching entry in `written` by deal_id, and combine.
+zoho.crm.updateOrgVariable("Digest_registry", registry.toJSON()); // single read-modify-write per run — Deluge scheduled functions run single-threaded, so no race
+info "Digest_registry updated for " + activeUsers.size() + " active users.";
 
-finalDigestJson = finalDigest.toJSON();
+// ============================= shared helpers =============================
+// Reused by every profile's generator (digest_generate_sales_manager.dg, _004_sales.dg,
+// _stub.dg).
 
-// --- Upload to WorkDrive and point the org variable at it (../ANALYSIS.md §4). ---
-fileName = "digest_run_" + zoho.currentdate.toString("yyyy-MM-dd") + ".json";
-uploadResp = invokeurl
-[
-	url: "https://www.zohoapis.com/workdrive/api/v1/upload" // TODO: confirm exact WorkDrive upload endpoint/params for this org's plan, and the target folder id
-	type: POST
-	parameters: {"content": finalDigestJson, "filename": fileName, "parent_id": zoho.crm.getOrgVariable("Digest_workdrive_folder_id")}.toString()
-	connection: "workdrive" // TODO: create this Connection (OAuth, WorkDrive scope) once
-];
+// Generic left-join: for each row in `collectedRows` (each a Map with an `idField` key), find
+// the matching entry in `writtenRows` (Claude's structured output for that section, or null for
+// profiles/sections with no LLM call) and merge the written fields onto the collected ones.
+// This is the implementation of what the original single-user file left as an unimplemented
+// `mergeCollectedAndWritten` TODO.
+List mergeSection(List collectedRows, List writtenRows, String idField)
+{
+	writtenById = Map();
+	if (writtenRows != null) {
+		for each w in writtenRows { writtenById.put(w.get(idField), w); }
+	}
 
-publicLink = uploadResp.get("permalink"); // TODO: confirm this is the public/shared-link field name for this API version
-zoho.crm.updateOrgVariable("Digest_url", publicLink); // TODO: confirm the exact Deluge task name for updating an org variable on this Deluge runtime
+	merged = List();
+	for each c in collectedRows {
+		row = Map();
+		row.putAll(c);
+		written = writtenById.get(c.get(idField));
+		if (written != null) { row.putAll(written); }
+		merged.add(row);
+	}
+	return merged;
+}
 
-info "Digest published: " + publicLink;
+// "Tasks personnelles" is common to every profile — turns the collectOwnTasksCalls bundle
+// (digest_collect.dg) into the generic card-list shape app/js/render.js's "card-list" section
+// type expects. No LLM text here (note starts blank, same as any freshly-surfaced item) unless
+// a profile's generator chooses to run its own Claude pass over these rows and merge on top.
+List buildTasksPersoRows(List dealIds, Map dealFacts)
+{
+	rows = List();
+	for each dealId in dealIds {
+		deal = dealFacts.get(dealId);
+		if (deal == null) { continue; }
+		row = Map();
+		row.put("deal_id", dealId);
+		row.put("deal", deal); // TODO: same "ds" (DS-number) field gap as elsewhere — the Deals COQL select in collectOwnTasksCalls doesn't include it yet; add it once the exact field name is confirmed on this org
+		row.put("passe", List());
+		row.put("propose", "");
+		row.put("note", "");
+		row.put("reschedulable", false);
+		row.put("deletable", false);
+		row.put("followup", null);
+		rows.add(row);
+	}
+	return rows;
+}
+
+// Builds one entry of the digest envelope's `sections` array (see app/js/render.js's
+// SECTION_RENDERERS — `key`/`type`/`title`/`accent` drive which renderer runs and how the lane
+// is labeled/colored; `kind`/`cols` are only used by the section types that need them).
+Map makeSection(String key, String type, String title, String accent, Object data, String kind, List cols)
+{
+	section = Map();
+	section.put("key", key);
+	section.put("type", type);
+	section.put("title", title);
+	section.put("accent", accent);
+	section.put("data", data);
+	if (kind != null) { section.put("kind", kind); }
+	if (cols != null) { section.put("cols", cols); }
+	return section;
+}
+
+// Uploads one user's final digest JSON to WorkDrive and returns the {url, run_date, profile}
+// entry the nightly loop stores in Digest_registry for that user.
+Map uploadDigest(String userId, String finalDigestJson, String profileName, String todayStr)
+{
+	fileName = "digest_run_" + todayStr + "_" + userId + ".json"; // user-qualified — the old date-only name would collide across users
+	uploadResp = invokeurl
+	[
+		url: "https://www.zohoapis.com/workdrive/api/v1/upload" // TODO: confirm exact WorkDrive upload endpoint/params for this org's plan, and the target folder id
+		type: POST
+		parameters: {"content": finalDigestJson, "filename": fileName, "parent_id": zoho.crm.getOrgVariable("Digest_workdrive_folder_id")}.toString()
+		connection: "workdrive" // TODO: create this Connection (OAuth, WorkDrive scope) once
+	];
+
+	publicLink = uploadResp.get("permalink"); // TODO: confirm this is the public/shared-link field name for this API version
+
+	meta = Map();
+	meta.put("url", publicLink);
+	meta.put("run_date", todayStr);
+	meta.put("profile", profileName);
+	return meta;
+}

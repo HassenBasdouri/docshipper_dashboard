@@ -1,26 +1,49 @@
-// Resolves and downloads the latest digest JSON from WorkDrive, the same way the reference
-// Employee Activity Audit widget's fileLoader.js resolves `Audit_url` and downloads a CSV —
-// same fallback ladder, JSON instead of CSV, and it's the ONLY network call this widget makes
-// on open (everything else was already computed by the nightly Deluge job).
-import { DIGEST_URL_VARIABLE } from "./config.js";
+// Resolves and downloads the current user's latest digest JSON from WorkDrive, the same way
+// the reference Employee Activity Audit widget's fileLoader.js resolves `Audit_url` and
+// downloads a CSV — same fallback ladder, JSON instead of CSV, and it's the ONLY network call
+// this widget makes on open (everything else was already computed by the nightly Deluge job).
+import { DIGEST_REGISTRY_VARIABLE } from "./config.js";
 import { getOrgVariable, initZoho } from "./zohoApi.js";
 
-export async function loadDigest() {
-  const url = await resolveDigestUrl();
+// The two "view as" local-preview options (see app/js/viewAs.js) map straight to a static file
+// instead of the registry — used both for local `npm start` preview and as a fallback when a
+// real user has no registry entry yet.
+const LOCAL_SAMPLE_FILES = {
+  "sample-sales-manager": "./sample-digest.json",
+  "sample-004-sales": "./sample-digest-004-sales.json",
+};
+
+export async function loadDigest(userId) {
+  const url = await resolveDigestUrl(userId);
   if (!url) {
-    throw new Error(`Org variable "${DIGEST_URL_VARIABLE}" is empty or unreadable.`);
+    throw new Error(`No digest available for user "${userId}" — check "${DIGEST_REGISTRY_VARIABLE}".`);
   }
   const raw = await downloadWithFallback(url);
   const parsed = parseDigestJson(raw);
+  if (parsed.user_id && userId && parsed.user_id !== userId) {
+    console.warn(`digest: loaded digest for user_id "${parsed.user_id}" but expected "${userId}"`);
+  }
   return parsed;
 }
 
-async function resolveDigestUrl() {
-  const fromOrgVar = await getOrgVariable(DIGEST_URL_VARIABLE);
-  if (fromOrgVar && typeof fromOrgVar === "string" && fromOrgVar.trim()) {
-    return fromOrgVar.trim();
+async function resolveDigestUrl(userId) {
+  if (userId && LOCAL_SAMPLE_FILES[userId]) {
+    return LOCAL_SAMPLE_FILES[userId];
   }
-  // Local/dev fallback: a same-origin static file, so the widget is testable without CRM.
+
+  const registryRaw = await getOrgVariable(DIGEST_REGISTRY_VARIABLE);
+  if (registryRaw && userId) {
+    try {
+      const registry = JSON.parse(registryRaw);
+      const entry = registry && registry[userId];
+      if (entry && entry.url) return entry.url;
+    } catch (_err) {
+      // fall through — malformed registry, treat as no entry
+    }
+  }
+
+  // No registry entry yet (no CRM / var unset / user not run yet) — local/dev fallback so the
+  // widget is still testable.
   return "./sample-digest.json";
 }
 

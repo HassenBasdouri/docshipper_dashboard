@@ -1,0 +1,96 @@
+// digest_collect_sales_manager.dg — Sales Manager profile's nightly CRM read (D1-D8 routing).
+//
+// This is the original single-user digest_collect.dg body, parameterized by userId instead of
+// a hardcoded Alexis id, with steps 1/2/4 factored out into the shared helpers in
+// digest_collect.dg. Calling this with Alexis's own id computes exactly what it always has —
+// see ../CLAUDE.md and ../ANALYSIS.md for the v24.1 policy context this implements.
+//
+// TODO before first real run: same as digest_collect.dg — confirm every module/field name
+// against the live org.
+
+Map digest_collect_sales_manager(String userId)
+{
+	today = zoho.currentdate;
+	todayStr = today.toString("yyyy-MM-dd");
+
+	result = Map();
+	result.put("run_date", todayStr);
+	result.put("profile", "Sales Manager");
+
+	// --- 1+2. This user's active Tasks/Calls (the "badge") + deal facts. ---
+	own = collectOwnTasksCalls(userId);
+	dealIds = own.get("deal_ids");
+	dealFacts = own.get("deal_facts");
+	result.put("tasks_perso_deal_ids", dealIds);
+	result.put("tasks_perso_deal_facts", dealFacts); // "Tasks personnelles" is common to every profile (see ../CLAUDE.md) — same bundle 004-SALES/stub use
+
+	// --- 3. Deterministic routing (D1-D8) — owner checks, weekday math. No LLM here. ---
+	voie1Candidates = List();
+	voie2Candidates = List();
+	supervisionCandidates = List();
+
+	for each dealId in dealIds {
+		deal = dealFacts.get(dealId);
+		if (deal == null) { continue; }
+		stage = deal.get("Stage");
+		if (stage == "Lost" || stage == "Junk" || stage == "Won") { continue; } // pipeline counts always exclude these
+
+		// B6: who else has an active item on this deal? (batched by ~22, per F.)
+		otherActiveItems = zoho.crm.searchRecords("Tasks", "(What_Id:equals:" + dealId + ")and(Status:equals:Not Started)");
+		otherActiveCalls = zoho.crm.searchRecords("Calls", "(What_Id:equals:" + dealId + ")and(Outgoing_Call_Status:in:Scheduled,Overdue)");
+		someoneElseIsOnIt = false;
+		referentName = null; // first other owner encountered — feeds "VOIE 3 — supervision"'s grouping in digest_generate_sales_manager.dg
+		for each item in otherActiveItems {
+			if (item.get("Owner").get("id") != userId) {
+				someoneElseIsOnIt = true;
+				if (referentName == null) { referentName = item.get("Owner").get("name"); }
+			}
+		}
+		for each item in otherActiveCalls {
+			if (item.get("Owner").get("id") != userId) {
+				someoneElseIsOnIt = true;
+				if (referentName == null) { referentName = item.get("Owner").get("name"); }
+			}
+		}
+
+		row = Map();
+		row.put("deal_id", dealId);
+		row.put("deal", deal);
+
+		if (someoneElseIsOnIt) {
+			row.put("referent", referentName);
+			supervisionCandidates.add(row); // D4 — voie 3, supervision
+		} else {
+			voie2Candidates.add(row); // D3 — voie 2, personne d'autre dessus
+		}
+		// D2 (voie 1 — question attend le pilote / retard réel) needs the chat-tail read; left for
+		// the sub-step below since it's per-deal I/O, batch it rather than looping request-per-request
+		// in production — kept simple here as a placeholder loop.
+	}
+
+	// --- 4. Initial (dispatch queue) — Gold detection is pure data, no LLM needed for the flag. ---
+	initialDeals = zoho.crm.searchRecords("Deals", "(Owner:equals:" + userId + ")and(Stage:equals:Initial)");
+	initialRows = classifyInitialDeals(initialDeals);
+
+	// --- 5. B2B Lost, queried independently of the badge (D5 — must show even off-badge). ---
+	b2bLost = zoho.crm.searchRecords("Deals", "(Owner:equals:" + userId + ")and(Stage:equals:B2B Lost)");
+	b2bRedispatchRows = List();
+	b2bPilotedRows = List();
+	for each deal in b2bLost {
+		activeAeItems = zoho.crm.searchRecords("Tasks", "(What_Id:equals:" + deal.get("id") + ")and(Status:equals:Not Started)");
+		if (activeAeItems.size() > 0) {
+			b2bPilotedRows.add(deal); // already piloted by an AE — info only
+		} else {
+			b2bRedispatchRows.add(deal); // needs the "why lost" read + re-dispatch note (step 2)
+		}
+	}
+
+	result.put("voie1_candidates", voie1Candidates);
+	result.put("voie2_candidates", voie2Candidates);
+	result.put("supervision_candidates", supervisionCandidates);
+	result.put("initial_rows", initialRows);
+	result.put("b2b_redispatch_candidates", b2bRedispatchRows);
+	result.put("b2b_piloted_rows", b2bPilotedRows);
+
+	return result;
+}

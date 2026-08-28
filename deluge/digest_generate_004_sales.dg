@@ -1,0 +1,129 @@
+// digest_generate_004_sales.dg — 004-SALES profile's nightly Claude call.
+//
+// Same mechanics as digest_generate_sales_manager.dg, smaller scope: house rules come from a
+// materially different, dedicated org variable (no dispatch/supervision language — a rep isn't
+// asked to route deals to anyone), and the output schema only covers the two sections that need
+// written text (tasks_perso, b2b_lost_own). "Mes deals Initial" needs no LLM call at all — its
+// heat/gold-estimate came straight out of digest_collect_004_sales.dg's deterministic
+// classification, so it's passed through unmerged.
+//
+// TODO before first real run: same as digest_generate_sales_manager.dg — store the Anthropic
+// API key securely, confirm the invokeurl allowlist, confirm the JSON<->Map conversion
+// built-ins. Also TODO: write Digest_house_rules_004_sales itself — this repo only has the
+// Sales Manager's v24.1 policy doc; a rep's house rules (note tone, what "propose" should say
+// for their own tasks/B2B Lost deals) haven't been written yet and shouldn't be invented here.
+
+Map digest_generate_004_sales(String userId, Map collected)
+{
+	MODEL_ID = "claude-opus-5";
+	ANTHROPIC_API_KEY = zoho.crm.getOrgVariable("Anthropic_api_key");
+	ANTHROPIC_VERSION = "2023-06-01";
+
+	stableSystemPrompt = zoho.crm.getOrgVariable("Digest_house_rules_004_sales");
+
+	systemBlocks = List();
+	stableBlock = Map();
+	stableBlock.put("type", "text");
+	stableBlock.put("text", stableSystemPrompt);
+	cacheControl = Map();
+	cacheControl.put("type", "ephemeral");
+	stableBlock.put("cache_control", cacheControl);
+	systemBlocks.add(stableBlock);
+
+	tasksPersoRows = buildTasksPersoRows(collected.get("tasks_perso_deal_ids"), collected.get("tasks_perso_deal_facts"));
+
+	factsForModel = Map();
+	factsForModel.put("tasks_perso", tasksPersoRows);
+	factsForModel.put("b2b_lost_own", collected.get("b2b_lost_own_rows"));
+
+	userContent = "Voici les faits du jour pour ce commercial (ses propres tasks/calls ouverts et "
+		+ "ses deals B2B Lost). Pour chaque item, rédige uniquement le texte demandé et renvoie "
+		+ "UNIQUEMENT un objet JSON, sans texte autour, respectant exactement ce schéma : "
+		+ "{\"tasks_perso\":[{\"deal_id\":\"\",\"passe\":[],\"propose\":\"\",\"note\":\"\"}],"
+		+ "\"b2b_lost_own\":[{\"deal_id\":\"\",\"passe\":[],\"propose\":\"\",\"note\":\"\"}]}"
+		+ "\n\nFaits du jour (JSON) :\n" + factsForModel.toJSON();
+
+	messages = List();
+	userMsg = Map();
+	userMsg.put("role", "user");
+	userMsg.put("content", userContent);
+	messages.add(userMsg);
+
+	requestBody = Map();
+	requestBody.put("model", MODEL_ID);
+	requestBody.put("max_tokens", 8000); // smaller scope than the Sales Manager call — fewer sections, no dispatch/supervision text
+	requestBody.put("system", systemBlocks);
+	requestBody.put("messages", messages);
+	outputConfig = Map();
+	outputConfig.put("effort", "high");
+	requestBody.put("output_config", outputConfig);
+
+	headers = Map();
+	headers.put("x-api-key", ANTHROPIC_API_KEY);
+	headers.put("anthropic-version", ANTHROPIC_VERSION);
+	headers.put("content-type", "application/json");
+
+	response = invokeurl
+	[
+		url: "https://api.anthropic.com/v1/messages"
+		type: POST
+		parameters: requestBody.toString()
+		headers: headers
+	];
+
+	info "cache_read_input_tokens: " + response.get("usage").get("cache_read_input_tokens");
+	info "cache_creation_input_tokens: " + response.get("usage").get("cache_creation_input_tokens");
+
+	contentBlocks = response.get("content");
+	writtenText = "";
+	for each block in contentBlocks {
+		if (block.get("type") == "text") { writtenText = block.get("text"); }
+	}
+	written = writtenText.toMap();
+
+	todayStr = collected.get("run_date");
+
+	tasksPersoMerged = mergeSection(tasksPersoRows, written.get("tasks_perso"), "deal_id");
+	b2bLostOwnMerged = mergeSection(collected.get("b2b_lost_own_rows"), written.get("b2b_lost_own"), "deal_id");
+
+	sections = List();
+	sections.add(makeSection("tasks_perso", "card-list", "Tasks personnelles", "info", tasksPersoMerged, "perso", null));
+	sections.add(makeSection("initial_own", "initial-info", "Mes deals Initial", "gold", initialOwnData(collected.get("initial_own_rows")), null, null));
+	sections.add(makeSection("b2b_lost_own", "card-list", "Mes B2B Lost à reprendre", "gold", b2bLostOwnMerged, "b2b_lost_own", null));
+
+	finalDigest = Map();
+	finalDigest.put("run_date", todayStr);
+	finalDigest.put("status", "delivered");
+	finalDigest.put("user_id", userId);
+	finalDigest.put("profile", "004-SALES");
+	finalDigest.put("badge", Map()); // TODO: pill computation not specified for this profile yet — same honest gap as the Sales Manager generator
+	finalDigest.put("sections", sections);
+	finalDigest.put("method_footer", Map());
+
+	finalDigestJson = finalDigest.toJSON();
+	return uploadDigest(userId, finalDigestJson, "004-SALES", todayStr);
+}
+
+// "Mes deals Initial" is 100% deterministic (Gold-heat classification already ran in
+// digest_collect_004_sales.dg) — group by heat the same way the Sales Manager's Initial section
+// does, no Claude text involved.
+Map initialOwnData(List initialOwnRows)
+{
+	byHeat = Map();
+	for each row in initialOwnRows {
+		heat = row.get("heat");
+		group = byHeat.get(heat);
+		if (group == null) { group = List(); byHeat.put(heat, group); }
+		group.add(row);
+	}
+	groups = List();
+	for each heat in byHeat.keys() {
+		g = Map();
+		g.put("heat", heat);
+		g.put("deals", byHeat.get(heat));
+		groups.add(g);
+	}
+	data = Map();
+	data.put("groups", groups);
+	return data;
+}

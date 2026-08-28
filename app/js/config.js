@@ -1,11 +1,19 @@
 // All tunables for the digest widget. Nothing in here should require touching
 // render.js/actions.js/digestLoader.js when the org's directory or module names change.
 
-// Org variable (Zoho CRM Settings > Org Variables) holding the public/shared WorkDrive link
-// to the latest digest JSON — same mechanism the Employee Activity Audit widget uses for
-// its `Audit_url` variable. The nightly Deluge job (deluge/digest_generate.dg) updates this
-// variable after each successful run.
-export const DIGEST_URL_VARIABLE = "Digest_url";
+// Org variable (Zoho CRM Settings > Org Variables) holding a JSON map of every user's latest
+// digest — {"<userId>": {"url","run_date","profile"}, ...}. Replaces the old single-user
+// `Digest_url` string variable now that the widget serves more than one person; the nightly
+// Deluge job (deluge/digest_generate.dg) rewrites this variable once per run after looping
+// over every active user.
+export const DIGEST_REGISTRY_VARIABLE = "Digest_registry";
+
+// Cosmetic header labels per CRM Profile. Falls back to the raw profile name for any profile
+// not listed here (including future stub profiles) — no code change needed to onboard one.
+export const PROFILE_LABELS = {
+  "Sales Manager": "Pilote — Sales Manager",
+  "004-SALES": "Mon pipeline",
+};
 
 // Deluge custom functions the widget calls for native actions (no copy-paste, no LLM
 // round-trip at click time — see deluge/digest_actions.dg for the implementations).
@@ -17,14 +25,6 @@ export const ACTION_FUNCTIONS = {
   applySupervisionBatch: "digest_apply_supervision_batch",
   redispatchB2bLost: "digest_redispatch_b2b_lost",
   cancelGhostCall: "digest_cancel_ghost_call",
-};
-
-// Alexis M. — the pipeline owner this digest is built for (Important#2 in the v24.1 spec:
-// no action button ever targets an item whose Owner.id isn't this id).
-export const PIPELINE_OWNER = {
-  name: "Alexis M.",
-  id: "4664241000189490004",
-  email: "alexis.m@docshipper.com",
 };
 
 // A2 — exact team directory with ids/emails, as verified via getUsers on 26/08.
@@ -78,20 +78,9 @@ export function requiresCompensationEmail(taggedEmail) {
   return !CS_EMAILS.has(taggedEmail);
 }
 
-// Section order fixed by E1 — the render layer walks this list, it never reorders on its own.
-export const SECTION_ORDER = [
-  "badge",
-  "initial",
-  "voie1",
-  "voie2",
-  "tasks_perso",
-  "supervision",
-  "b2b_lost_redispatch",
-  "b2b_lost_piloted",
-  "deals_closed",
-  "vigilance",
-  "method_footer",
-];
+// Section order is now data-driven — each digest JSON's own `sections` array (see
+// app/js/render.js's SECTION_RENDERERS) determines what renders and in what order, so there's
+// no static list to keep in sync here.
 
 // CRM deal record URL builder (used for "Open Deal" links and dslink cells).
 export function dealUrl(crmDomain, dealId) {

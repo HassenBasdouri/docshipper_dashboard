@@ -31,6 +31,10 @@ h1 { font-size: 19px; margin: 0 0 2px; }
 .status.error { border-color: var(--crit); color: var(--crit); }
 .stale-banner { background: var(--surface-1); border: 1px solid var(--warn); color: var(--warn); border-radius: 8px; padding: 8px 12px; margin-bottom: 14px; font-size: 13px; }
 
+.view-as { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; font-size: 12.5px; color: var(--text-dim); }
+.view-as select { background: var(--surface-2); color: var(--text-primary); border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; font-size: 12.5px; }
+.view-as-banner { background: var(--surface-1); border: 1px solid var(--accent); color: var(--accent); border-radius: 8px; padding: 8px 12px; margin-bottom: 14px; font-size: 13px; }
+
 .badge { background: var(--surface-0); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin-bottom: 20px; }
 .badge .big { font-size: 15px; font-weight: 700; }
 .pills { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
@@ -43,13 +47,12 @@ h1 { font-size: 19px; margin: 0 0 2px; }
 
 .lane { border-left: 3px solid var(--grid); padding-left: 12px; margin: 26px 0 8px; }
 .lane h2 { font-size: 15px; margin: 0 0 3px; letter-spacing: 0.01em; }
-.lane.l-init { border-left-color: var(--gold); }
-.lane.l-v1 { border-left-color: var(--crit); }
-.lane.l-v2 { border-left-color: var(--warn); }
-.lane.l-task { border-left-color: var(--accent); }
-.lane.l-sup { border-left-color: var(--good); }
-.lane.l-bl { border-left-color: var(--gold); }
-.lane.l-vig { border-left-color: var(--grid); }
+.lane.accent-gold { border-left-color: var(--gold); }
+.lane.accent-crit { border-left-color: var(--crit); }
+.lane.accent-warn { border-left-color: var(--warn); }
+.lane.accent-info { border-left-color: var(--accent); }
+.lane.accent-good { border-left-color: var(--good); }
+.lane.accent-neutral { border-left-color: var(--grid); }
 
 .grp { font-size: 12.5px; font-weight: 700; color: var(--text-dim); margin: 16px 0 7px; text-transform: uppercase; letter-spacing: 0.05em; }
 

@@ -1,12 +1,1 @@
-{
-  "name": "docshipper-digest-widget",
-  "version": "1.0.0",
-  "private": true,
-  "description": "Zoho CRM widget rendering the daily DocShipper pipeline digest from a WorkDrive-backed JSON payload.",
-  "scripts": {
-    "start": "node server/index.js"
-  },
-  "dependencies": {
-    "express": "^4.19.2"
-  }
-}
+{"name":"docshipper-digest-widget","version":"1.0.0","private":true,"description":"Zoho CRM widget rendering the daily DocShipper pipeline digest from a WorkDrive-backed JSON payload.","scripts":{"start":"node server/index.js"},"dependencies":{"express":"^4.19.2","portfinder":"^1.0.25"}}

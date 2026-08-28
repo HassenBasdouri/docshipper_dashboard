@@ -1,0 +1,158 @@
+// digest_generate_sales_manager.dg — Sales Manager profile's nightly Claude call.
+//
+// Same mechanics as the original single-user digest_generate.dg: one cached Claude call with
+// the static v24.1 house rules as a cache_control system block, structured JSON output, merged
+// (via digest_generate.dg's shared mergeSection helper) onto the deterministic facts from
+// digest_collect_sales_manager.
+//
+// Cost levers used here (see ../ANALYSIS.md §3):
+//  - System prompt is split into a STABLE block (house rules, never changes day to day) with
+//    cache_control so Anthropic serves it at cache-read pricing on every day after the first —
+//    now amortized across every Sales Manager processed in the same nightly run, not just
+//    across days, since digest_generate.dg's loop processes every active user in one run.
+//  - Model defaults to claude-opus-5. This is the single largest cost lever in this job if
+//    output quality holds at a cheaper tier (e.g. claude-sonnet-5) — a deliberate tradeoff for
+//    the team to make, not something to change silently; swap MODEL_ID below only on an
+//    explicit decision.
+//  - One call per user, structured JSON output — no sub-agents, no free-written HTML.
+//
+// TODO before first real run: same as the original file — store the Anthropic API key securely,
+// confirm the invokeurl allowlist, confirm the exact JSON<->Map conversion built-ins.
+
+Map digest_generate_sales_manager(String userId, Map collected)
+{
+	MODEL_ID = "claude-opus-5";
+	ANTHROPIC_API_KEY = zoho.crm.getOrgVariable("Anthropic_api_key"); // store as an org variable, not inline
+	ANTHROPIC_VERSION = "2023-06-01";
+
+	stableSystemPrompt = zoho.crm.getOrgVariable("Digest_house_rules_sales_manager"); // renamed from Digest_house_rules_v24_1 — paste the static v24.1 rulebook text in as an org variable once, so this file never embeds 632 lines inline
+
+	systemBlocks = List();
+	stableBlock = Map();
+	stableBlock.put("type", "text");
+	stableBlock.put("text", stableSystemPrompt);
+	cacheControl = Map();
+	cacheControl.put("type", "ephemeral");
+	stableBlock.put("cache_control", cacheControl);
+	systemBlocks.add(stableBlock);
+
+	userContent = "Voici les faits du jour, déjà triés (D1-D8) et vérifiés par requête CRM fraîche. "
+		+ "Pour chaque item, rédige uniquement le texte demandé (note de dispatch C2ter, "
+		+ "\"où ça en est\" D4bis, raison de perte B2B Lost) et renvoie UNIQUEMENT un objet JSON, "
+		+ "sans texte autour, respectant exactement ce schéma : "
+		+ "{\"initial\":[{\"deal_id\":\"\",\"note\":\"\",\"gold_estimate\":\"\"}],"
+		+ "\"voie1\":[{\"deal_id\":\"\",\"passe\":[],\"propose\":\"\",\"note\":\"\"}],"
+		+ "\"voie2\":[...même forme...],"
+		+ "\"supervision_rows\":[{\"deal_id\":\"\",\"ou_ca_en_est_line\":\"\",\"ou_ca_en_est_waiting\":\"\"}],"
+		+ "\"b2b_lost_redispatch\":[{\"deal_id\":\"\",\"heat\":\"\",\"why_lost\":\"\",\"angle\":\"\",\"note\":\"\"}]}"
+		+ "\n\nFaits du jour (JSON) :\n" + collected.toJSON();
+
+	messages = List();
+	userMsg = Map();
+	userMsg.put("role", "user");
+	userMsg.put("content", userContent);
+	messages.add(userMsg);
+
+	requestBody = Map();
+	requestBody.put("model", MODEL_ID);
+	requestBody.put("max_tokens", 16000);
+	requestBody.put("system", systemBlocks);
+	requestBody.put("messages", messages);
+	outputConfig = Map();
+	outputConfig.put("effort", "high");
+	requestBody.put("output_config", outputConfig);
+
+	headers = Map();
+	headers.put("x-api-key", ANTHROPIC_API_KEY);
+	headers.put("anthropic-version", ANTHROPIC_VERSION);
+	headers.put("content-type", "application/json");
+
+	response = invokeurl
+	[
+		url: "https://api.anthropic.com/v1/messages"
+		type: POST
+		parameters: requestBody.toString()
+		headers: headers
+	];
+
+	// Verify caching worked (should read a large cache_read_input_tokens after the first Sales
+	// Manager processed each day):
+	info "cache_read_input_tokens: " + response.get("usage").get("cache_read_input_tokens");
+	info "cache_creation_input_tokens: " + response.get("usage").get("cache_creation_input_tokens");
+
+	contentBlocks = response.get("content");
+	writtenText = "";
+	for each block in contentBlocks {
+		if (block.get("type") == "text") { writtenText = block.get("text"); }
+	}
+	written = writtenText.toMap(); // parse the model's structured JSON output
+
+	todayStr = collected.get("run_date");
+
+	// --- Merge step 1's facts with step 2's text (envelope shape, see ../ANALYSIS.md §4). ---
+	initialMerged = mergeSection(collected.get("initial_rows"), written.get("initial"), "deal_id");
+	initialByHeat = Map();
+	for each row in initialMerged {
+		heat = row.get("heat");
+		group = initialByHeat.get(heat);
+		if (group == null) { group = List(); initialByHeat.put(heat, group); }
+		group.add(row);
+	}
+	initialGroups = List();
+	for each heat in initialByHeat.keys() {
+		g = Map();
+		g.put("heat", heat);
+		g.put("deals", initialByHeat.get(heat));
+		initialGroups.add(g);
+	}
+	initialData = Map();
+	initialData.put("groups", initialGroups);
+
+	voie1Rows = mergeSection(collected.get("voie1_candidates"), written.get("voie1"), "deal_id");
+	voie2Rows = mergeSection(collected.get("voie2_candidates"), written.get("voie2"), "deal_id");
+	supervisionMerged = mergeSection(collected.get("supervision_candidates"), written.get("supervision_rows"), "deal_id");
+	b2bRedispatchRows = mergeSection(collected.get("b2b_redispatch_candidates"), written.get("b2b_lost_redispatch"), "deal_id");
+	tasksPersoRows = buildTasksPersoRows(collected.get("tasks_perso_deal_ids"), collected.get("tasks_perso_deal_facts"));
+
+	supervisionByReferent = Map();
+	for each row in supervisionMerged {
+		referent = row.get("referent");
+		group = supervisionByReferent.get(referent);
+		if (group == null) { group = List(); supervisionByReferent.put(referent, group); }
+		group.add(row);
+	}
+	supervisionGroups = List();
+	for each referent in supervisionByReferent.keys() {
+		g = Map();
+		g.put("referent", referent);
+		g.put("rows", supervisionByReferent.get(referent));
+		supervisionGroups.add(g);
+	}
+	supervisionData = Map();
+	supervisionData.put("groups_by_referent", supervisionGroups);
+
+	sections = List();
+	sections.add(makeSection("initial", "initial-dispatch", "AXE 1 — INITIAL", "gold", initialData, null, null));
+	sections.add(makeSection("voie1", "card-list", "VOIE 1 — ça n'est pas passé", "crit", voie1Rows, "voie1", null));
+	sections.add(makeSection("voie2", "card-list", "VOIE 2 — personne d'autre dessus", "warn", voie2Rows, "voie2", null));
+	sections.add(makeSection("tasks_perso", "card-list", "Tasks personnelles", "info", tasksPersoRows, "perso", null));
+	sections.add(makeSection("supervision", "supervision", "VOIE 3 — supervision", "good", supervisionData, null, null));
+	sections.add(makeSection("b2b_lost_redispatch", "b2b-redispatch", "B2B Lost à redispatcher", "gold", b2bRedispatchRows, null, null));
+	sections.add(makeSection("b2b_lost_piloted", "info-table", "B2B Lost déjà pilotés", "gold", collected.get("b2b_piloted_rows"), null, {"ds", "client", "ae", "item"}));
+	// TODO: "deals_closed" (ghost-table) and "vigilance" candidates aren't collected yet either —
+	// same pre-existing gap as the original single-user digest_collect.dg, which never queried
+	// for them. Add a collect step for both once their exact CRM query is confirmed, the same way
+	// initial_rows/b2b_redispatch_candidates were.
+
+	finalDigest = Map();
+	finalDigest.put("run_date", todayStr);
+	finalDigest.put("status", "delivered");
+	finalDigest.put("user_id", userId);
+	finalDigest.put("profile", "Sales Manager");
+	finalDigest.put("badge", Map()); // TODO: badge/pill computation was never implemented in the original single-user script either — see ../ANALYSIS.md §4 for the illustrative shape to reproduce once the v24.1 pill rules are confirmed
+	finalDigest.put("sections", sections);
+	finalDigest.put("method_footer", Map()); // TODO: same gap — anomalies/counts footer was never computed, only illustrated in the sample JSON
+
+	finalDigestJson = finalDigest.toJSON();
+	return uploadDigest(userId, finalDigestJson, "Sales Manager", todayStr);
+}

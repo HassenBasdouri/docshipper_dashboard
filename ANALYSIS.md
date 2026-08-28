@@ -107,36 +107,56 @@ itself makes **zero live COQL calls** when Alexis opens it.
 Reusing the pattern from the existing "Employee Activity Audit" widget (`Audit_url` org
 variable → WorkDrive file → client-side fetch with fallback transports) instead of a custom
 CRM module. This avoids needing custom-module creation rights and keeps the widget's read path
-identical in shape to code already proven in this org.
+identical in shape to code already proven in this org — now generalized to one digest per user
+instead of one global digest.
 
-- The nightly Deluge job writes one JSON file per day to a fixed WorkDrive folder (e.g.
-  `digest_run_2026-08-28.json`) and updates a **`Digest_url`** CRM org variable to point at it
-  (public/shared link, same mechanism `Audit_url` uses today).
-- JSON shape — one block per E1 output section, holding **facts + pre-written note text**, never
-  markup:
+- The nightly Deluge job writes one JSON file per user per day to a fixed WorkDrive folder (e.g.
+  `digest_run_2026-08-28_<userId>.json`, user-qualified to avoid collisions) and updates a single
+  **`Digest_registry`** CRM org variable — a JSON map `{"<userId>": {"url", "run_date",
+  "profile"}, ...}` — after looping over every active user (`Digest_active_users`). This replaces
+  the original single-user `Digest_url` string variable.
+- JSON shape — a self-describing envelope: `sections` is an ordered list of
+  `{key, type, title, accent, data}` (plus `kind`/`cols`/`opts` where a section type needs them),
+  where `data` holds **facts + pre-written note text**, never markup. The widget's renderer
+  (`app/js/render.js`) walks `sections` through a `type` → renderer registry, so a profile simply
+  omits any section it doesn't have — no profile-conditional code in the widget:
   ```json
   {
     "run_date": "2026-08-28",
     "status": "delivered",
+    "user_id": "...",
+    "profile": "Sales Manager",
     "badge": { "total": 9, "very_grave": false, "pills": [...] },
-    "initial": { "groups": [ { "heat": "gold", "deals": [ { "ds": "DS-58854", ... } ] } ] },
-    "voie1": [ { "ds": "...", "passe": [...], "propose": "...", "note": "...", "target": {...}, "followup": {...} } ],
-    "voie2": [ ... ],
-    "tasks_perso": [ ... ],
-    "supervision": { "groups_by_referent": [ { "referent": "...", "rows": [ ... ] } ] },
-    "b2b_lost_redispatch": [ { "ds": "...", "old_owner": "...", "heat": "chaud", "why_lost": "...", "angle": "...", "note": "..." } ],
-    "b2b_lost_piloted": [ ... ],
-    "deals_closed": [ ... ],
-    "vigilance": [ ... ],
+    "sections": [
+      { "key": "initial", "type": "initial-dispatch", "title": "AXE 1 — INITIAL", "accent": "gold",
+        "data": { "groups": [ { "heat": "gold", "deals": [ { "ds": "DS-58854", ... } ] } ] } },
+      { "key": "voie1", "type": "card-list", "kind": "voie1", "title": "VOIE 1 — ça n'est pas passé", "accent": "crit",
+        "data": [ { "ds": "...", "passe": [...], "propose": "...", "note": "...", "target_tag": "...", "followup": {...} } ] },
+      { "key": "voie2", "type": "card-list", "kind": "voie2", "title": "VOIE 2 — personne d'autre dessus", "accent": "warn", "data": [...] },
+      { "key": "tasks_perso", "type": "card-list", "kind": "perso", "title": "Tasks personnelles", "accent": "info", "data": [...] },
+      { "key": "supervision", "type": "supervision", "title": "VOIE 3 — supervision", "accent": "good",
+        "data": { "groups_by_referent": [ { "referent": "...", "rows": [...] } ] } },
+      { "key": "b2b_lost_redispatch", "type": "b2b-redispatch", "title": "B2B Lost à redispatcher", "accent": "gold",
+        "data": [ { "ds": "...", "old_owner": "...", "heat": "chaud", "why_lost": "...", "angle": "...", "note": "..." } ] },
+      { "key": "b2b_lost_piloted", "type": "info-table", "cols": ["ds","client","ae","item"], "title": "B2B Lost déjà pilotés", "accent": "gold", "data": [...] },
+      { "key": "deals_closed", "type": "ghost-table", "title": "Deals réellement clos", "accent": "gold", "data": [...] },
+      { "key": "vigilance", "type": "card-list", "kind": "vig", "opts": { "noteOnly": true }, "title": "Vigilance", "accent": "neutral", "data": [...] }
+    ],
     "method_footer": { "counts": {...}, "anomalies": [...] }
   }
   ```
+  A profile like 004-SALES sends a much shorter `sections` list (`tasks_perso`, a read-only
+  `initial-info` section, and a note-post-only `b2b_lost_own` card list) — see
+  `app/sample-digest-004-sales.json` for a full example, and `../CLAUDE.md`'s "Adding a new
+  profile" for how a new profile's collector/generator populates this envelope.
 - Widget reads this via the same multi-fallback loader style as `fileLoader.js`
   (`CONNECTION.invoke` → `CONNECTOR.invokeAPI` → `HTTP.get` → `fetch`), parses JSON instead of
-  CSV, and renders a **fixed template** — zero COQL calls on open.
-- If the nightly job fails, last-good JSON stays in place with `status` still `"delivered"` from
-  its own run date; the widget shows a staleness banner when `run_date` isn't today rather than
-  going empty.
+  CSV, looks up the logged-in user's own entry in `Digest_registry`, and renders a **template
+  driven by the digest's own `sections` list** — zero COQL calls on open.
+- If the nightly job fails for a given user, that user's last-good registry entry stays in place
+  with `status` still `"delivered"` from its own run date; the widget shows a staleness banner
+  when `run_date` isn't today rather than going empty. A failure for one user never affects
+  another's entry — the nightly loop updates the registry once after processing everyone.
 
 ## 5. Action flow (native, no copy-paste)
 

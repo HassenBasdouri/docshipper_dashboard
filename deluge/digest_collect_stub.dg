@@ -1,0 +1,25 @@
+// digest_collect_stub.dg — minimal collector for any profile without a real implementation yet
+// (Customer Service Manager, Customer Service, Sourcing Manager, Operations Manager, 005-OPS as
+// of this writing).
+//
+// Returns only the common "my open Tasks/Calls" bundle every profile gets — no profile-specific
+// sections, since none are defined for these profiles yet and this repo doesn't invent business
+// rules that haven't been specified. Adding a real profile later means writing a new
+// digest_collect_<profile>.dg like digest_collect_004_sales.dg, plus one branch in
+// digest_collect.dg's router — this file is the floor every new profile starts from.
+
+Map digest_collect_stub(String userId, String profileName)
+{
+	today = zoho.currentdate;
+	todayStr = today.toString("yyyy-MM-dd");
+
+	result = Map();
+	result.put("run_date", todayStr);
+	result.put("profile", profileName);
+
+	own = collectOwnTasksCalls(userId);
+	result.put("tasks_perso_deal_ids", own.get("deal_ids"));
+	result.put("tasks_perso_deal_facts", own.get("deal_facts"));
+
+	return result;
+}

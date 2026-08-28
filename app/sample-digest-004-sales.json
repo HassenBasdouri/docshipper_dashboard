@@ -1,0 +1,110 @@
+{
+  "run_date": "2026-08-28",
+  "status": "delivered",
+  "user_id": "4664241000999900001",
+  "profile": "004-SALES",
+  "badge": {
+    "total": 4,
+    "very_grave": false,
+    "pills": [
+      { "label": "tasks perso", "count": 2 },
+      { "label": "initial", "count": 1 },
+      { "label": "b2b lost à travailler", "count": 1 }
+    ]
+  },
+  "sections": [
+    {
+      "key": "tasks_perso",
+      "type": "card-list",
+      "kind": "perso",
+      "title": "Tasks personnelles",
+      "accent": "info",
+      "data": [
+        {
+          "deal_id": "101",
+          "ds": "DS-60021",
+          "client": "Nordic Freight SARL",
+          "stage": "Quote sent",
+          "route": "",
+          "passe": ["Client relancé le 26/08, en attente de retour."],
+          "propose": "Relancer par téléphone si pas de retour avant le 31/08.",
+          "note": "",
+          "target_tag": "",
+          "record_id": "20001",
+          "record_module": "Tasks",
+          "reschedulable": true,
+          "deletable": true,
+          "followup": { "type": "task", "date": "2026-08-31" }
+        },
+        {
+          "deal_id": "102",
+          "ds": "DS-60088",
+          "client": "Atlas Import",
+          "stage": "Negotiation",
+          "route": "",
+          "passe": ["Appel prévu ce jour à 15h."],
+          "propose": "Confirmer le créneau avec le client avant l'appel.",
+          "note": "",
+          "target_tag": "",
+          "record_id": "20002",
+          "record_module": "Calls",
+          "reschedulable": true,
+          "deletable": false,
+          "followup": { "type": "call", "date": "2026-08-28" }
+        }
+      ]
+    },
+    {
+      "key": "initial_own",
+      "type": "initial-info",
+      "title": "Mes deals Initial",
+      "accent": "gold",
+      "data": {
+        "groups": [
+          {
+            "heat": "gold",
+            "deals": [
+              {
+                "deal_id": "103",
+                "ds": "DS-60142",
+                "client": "Horizon Textiles",
+                "route": "Ningbo → Anvers · 20' DV · 800kg · FOB · Web · 28/08",
+                "gold_estimate": "Composite 3180 USD/20' (+4% s/s) — indicative, hors droits, à confirmer."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "key": "b2b_lost_own",
+      "type": "card-list",
+      "kind": "b2b_lost_own",
+      "title": "Mes B2B Lost à reprendre",
+      "accent": "gold",
+      "data": [
+        {
+          "deal_id": "104",
+          "ds": "DS-58971",
+          "client": "Meridian Auto Parts",
+          "stage": "B2B Lost",
+          "route": "Shenzhen → Marseille",
+          "passe": ["Dernier échange le 15/07 — client attendait une contre-offre."],
+          "propose": "Recontacter avec un tarif révisé avant le 05/09.",
+          "note": "",
+          "target_tag": "",
+          "record_id": null,
+          "record_module": null,
+          "reschedulable": false,
+          "deletable": false,
+          "followup": null
+        }
+      ]
+    }
+  ],
+  "method_footer": {
+    "counts": { "tasks_perso": 2, "initial_own": 1, "b2b_lost_own": 1 },
+    "anomalies": [],
+    "note": "Échantillon local — pas un vrai run."
+  }
+}

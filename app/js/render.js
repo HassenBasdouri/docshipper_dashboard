@@ -7,6 +7,18 @@ import * as actions from "./actions.js";
 
 const root = () => document.getElementById("digest-root");
 
+// Section `type` → renderer. Each digest's `sections` array is walked in order — new profiles
+// (or future section kinds) plug in here without touching renderDigest itself.
+const SECTION_RENDERERS = {
+  "card-list": (section, crmDomain) => renderCardList(section.data, crmDomain, section.kind, section.opts || {}),
+  "initial-dispatch": (section, crmDomain) => renderInitial(section.data, crmDomain, { dispatch: true }),
+  "initial-info": (section, crmDomain) => renderInitial(section.data, crmDomain, { dispatch: false }),
+  "supervision": (section, crmDomain) => renderSupervision(section.data, crmDomain),
+  "b2b-redispatch": (section, crmDomain) => renderB2bRedispatch(section.data, crmDomain),
+  "info-table": (section, crmDomain) => renderInfoTable(section.data, crmDomain, section.cols),
+  "ghost-table": (section, crmDomain) => renderGhostTable(section.data, crmDomain),
+};
+
 export function renderDigest(data, crmDomain) {
   const container = root();
   container.innerHTML = "";
@@ -16,15 +28,17 @@ export function renderDigest(data, crmDomain) {
   }
 
   container.appendChild(renderBadge(data.badge));
-  container.appendChild(lane("l-init", `AXE 1 — INITIAL (${count(data.initial)})`, renderInitial(data.initial, crmDomain)));
-  container.appendChild(lane("l-v1", `VOIE 1 — ça n'est pas passé (${data.voie1.length})`, renderCardList(data.voie1, crmDomain, "voie1")));
-  container.appendChild(lane("l-v2", `VOIE 2 — personne d'autre dessus (${data.voie2.length})`, renderCardList(data.voie2, crmDomain, "voie2")));
-  container.appendChild(lane("l-task", `Tasks personnelles (${data.tasks_perso.length})`, renderCardList(data.tasks_perso, crmDomain, "perso")));
-  container.appendChild(lane("l-sup", `VOIE 3 — supervision (${countSupervision(data.supervision)})`, renderSupervision(data.supervision, crmDomain)));
-  container.appendChild(lane("l-bl", `B2B Lost à redispatcher (${data.b2b_lost_redispatch.length})`, renderB2bRedispatch(data.b2b_lost_redispatch, crmDomain)));
-  container.appendChild(lane("l-bl", `B2B Lost déjà pilotés (${data.b2b_lost_piloted.length})`, renderInfoTable(data.b2b_lost_piloted, crmDomain, ["ds", "client", "ae", "item"])));
-  container.appendChild(lane("l-bl", `Deals réellement clos (${data.deals_closed.length})`, renderGhostTable(data.deals_closed, crmDomain)));
-  container.appendChild(lane("l-vig", `Vigilance (${data.vigilance.length})`, renderCardList(data.vigilance, crmDomain, "vig", { noteOnly: true })));
+
+  (data.sections || []).forEach((section) => {
+    const renderer = SECTION_RENDERERS[section.type];
+    if (!renderer) {
+      console.warn(`digest: unknown section type "${section.type}" (key="${section.key}")`);
+      return;
+    }
+    const title = `${section.title} (${sectionCount(section)})`;
+    container.appendChild(lane(section.accent, title, renderer(section, crmDomain)));
+  });
+
   container.appendChild(renderMethodFooter(data.method_footer));
 
   actions.setBadgeBase(data.badge.total || 0);
@@ -42,16 +56,19 @@ function staleBanner(data) {
   return div;
 }
 
-function count(initial) {
-  return (initial.groups || []).reduce((sum, g) => sum + g.deals.length, 0);
-}
-function countSupervision(sup) {
-  return (sup.groups_by_referent || []).reduce((sum, g) => sum + g.rows.length, 0);
+function sectionCount(section) {
+  if (section.type === "initial-dispatch" || section.type === "initial-info") {
+    return (section.data.groups || []).reduce((sum, g) => sum + g.deals.length, 0);
+  }
+  if (section.type === "supervision") {
+    return (section.data.groups_by_referent || []).reduce((sum, g) => sum + g.rows.length, 0);
+  }
+  return (section.data || []).length;
 }
 
-function lane(cls, title, bodyEl) {
+function lane(accent, title, bodyEl) {
   const section = document.createElement("section");
-  section.className = `lane ${cls}`;
+  section.className = `lane accent-${accent}`;
   const h2 = document.createElement("h2");
   h2.textContent = title;
   section.appendChild(h2);
@@ -80,7 +97,7 @@ function renderBadge(badge) {
 
 // --- AXE 1 Initial ---
 
-function renderInitial(initial, crmDomain) {
+function renderInitial(initial, crmDomain, opts = { dispatch: true }) {
   const wrap = document.createElement("div");
   const order = ["gold", "rapide", "moyen", "prudence", "douce"];
   const groups = (initial.groups || []).slice().sort((a, b) => order.indexOf(a.heat) - order.indexOf(b.heat));
@@ -89,12 +106,12 @@ function renderInitial(initial, crmDomain) {
     grp.className = "grp";
     grp.textContent = g.heat.toUpperCase();
     wrap.appendChild(grp);
-    g.deals.forEach((deal) => wrap.appendChild(renderInitialCard(deal, crmDomain)));
+    g.deals.forEach((deal) => wrap.appendChild(renderInitialCard(deal, crmDomain, opts)));
   });
   return wrap;
 }
 
-function renderInitialCard(deal, crmDomain) {
+function renderInitialCard(deal, crmDomain, opts) {
   const card = document.createElement("article");
   card.className = "card";
   card.appendChild(dismissBtn(card));
@@ -105,6 +122,12 @@ function renderInitialCard(deal, crmDomain) {
     est.className = "passe good";
     est.innerHTML = `<b>Estimation indicative (Gold)</b> — ${escapeHtml(deal.gold_estimate)}`;
     card.appendChild(est);
+  }
+
+  if (!opts.dispatch) {
+    // Read-only for profiles where the viewer already IS the owner (e.g. 004-SALES) — no
+    // dispatch-to-someone-else action makes sense here, so skip the whole panel.
+    return card;
   }
 
   const panel = document.createElement("div");

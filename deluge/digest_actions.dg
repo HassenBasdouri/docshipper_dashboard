@@ -4,22 +4,43 @@
 // digest_generate.dg the night before and arrives as a function argument.
 //
 // Shared safety rules baked into every function below (from the v24.1 spec, Important#2 / B6 /
-// A8 / A7 / B7):
-//  - Never write to a Task/Call whose Owner.id isn't Alexis's id — re-checked here even though
-//    the widget already filtered client-side, since the CRM can have moved since the digest
-//    was generated (Important#3).
+// A8 / A7 / B7, now generalized from "Alexis" to "the acting user"):
+//  - Never write to a Task/Call whose Owner.id isn't the acting user's id — re-checked here even
+//    though the widget already filtered client-side, since the CRM can have moved since the
+//    digest was generated (Important#3).
 //  - A8 channel check (Costing thread present vs. absent) runs fresh on every note post, never
 //    cached from the nightly job.
 //  - A7 compensation email fires after every tagging note, except when the only tags are CS
 //    simples (config.js TEAM.cs).
 //  - B7: any date this function receives should already be a weekday; these functions don't
 //    silently correct a bad date, they just apply it — validation happens widget-side.
+//
+// SECURITY — who is "the acting user"? The widget cannot be trusted to say who's acting: if
+// every function just took a client-supplied user id as a parameter, any CRM user could pass
+// any id and write records as someone else. Every function below instead resolves the real
+// actor from Deluge's own session variable (`zoho.loginuserid`), with exactly one named
+// exception: HASSEN_ID may pass `viewAsUserId` to explicitly test as another profile (see
+// ../app/js/viewAs.js) — and that override only takes effect when `zoho.loginuserid` really is
+// Hassen, never based on anything the client claims. See resolveActor() below.
+//
+// TODO before first real run: confirm every module/field name against the live org; confirm
+// `zoho.loginuserid` is in fact populated inside a function invoked via
+// ZOHO.CRM.FUNCTIONS.execute from a widget (standard Deluge session variable, but its exact
+// propagation through a widget-triggered custom function should be confirmed once deployed).
 
-ALEXIS_ID = "4664241000189490004";
+HASSEN_ID = "4664241000160830001"; // test/admin viewer — see app/js/viewAs.js
 
-// --- digest_dispatch_initial(dealId, aeId, note, followup) ---
-void digest_dispatch_initial(String dealId, String aeId, String note, Map followup)
+// --- digest_dispatch_initial(dealId, aeId, note, followup, viewAsUserId) ---
+void digest_dispatch_initial(String dealId, String aeId, String note, Map followup, String viewAsUserId)
 {
+	actingUserId = resolveActor(viewAsUserId);
+	if (getUserProfile(actingUserId) != "Sales Manager") {
+		result = Map();
+		result.put("ok", false);
+		result.put("error", "Action réservée au profil Sales Manager.");
+		return result.toJSON();
+	}
+
 	// B2 — single-button Initial dispatch: owner change + channel-aware note + A7 email.
 	dealUpdate = Map();
 	dealUpdate.put("id", dealId);
@@ -28,10 +49,10 @@ void digest_dispatch_initial(String dealId, String aeId, String note, Map follow
 	dealUpdate.put("Owner", ownerMap);
 	updateResp = zoho.crm.updateRecord("Deals", dealId, dealUpdate, {"trigger": {"workflow"}});
 
-	postResult = postNoteWithChannelCheck(dealId, note);
+	postResult = postNoteWithChannelCheck(dealId, note, actingUserId);
 
 	if (followup != null && followup.get("type") != null) {
-		createFollowup(dealId, ALEXIS_ID, followup.get("type"), followup.get("date"));
+		createFollowup(dealId, actingUserId, followup.get("type"), followup.get("date"));
 	}
 
 	result = Map();
@@ -41,25 +62,27 @@ void digest_dispatch_initial(String dealId, String aeId, String note, Map follow
 	return result.toJSON();
 }
 
-// --- digest_post_followup_note(dealId, note, targetTag) ---
-void digest_post_followup_note(String dealId, String note, String targetTag)
+// --- digest_post_followup_note(dealId, note, targetTag, viewAsUserId) ---
+void digest_post_followup_note(String dealId, String note, String targetTag, String viewAsUserId)
 {
-	postResult = postNoteWithChannelCheck(dealId, note);
+	actingUserId = resolveActor(viewAsUserId);
+	postResult = postNoteWithChannelCheck(dealId, note, actingUserId);
 	result = Map();
 	result.put("ok", true);
 	result.put("note", postResult);
 	return result.toJSON();
 }
 
-// --- digest_reschedule_item(recordId, module, newDate) ---
-void digest_reschedule_item(String recordId, String module, String newDate)
+// --- digest_reschedule_item(recordId, module, newDate, viewAsUserId) ---
+void digest_reschedule_item(String recordId, String module, String newDate, String viewAsUserId)
 {
+	actingUserId = resolveActor(viewAsUserId);
 	ownerId = getRecordOwnerId(module, recordId);
-	if (ownerId != ALEXIS_ID) {
+	if (ownerId != actingUserId) {
 		// B6 — never touch another owner's item, even if the widget somehow sent one.
 		result = Map();
 		result.put("ok", false);
-		result.put("error", "Record not owned by Alexis — refusing to reschedule.");
+		result.put("error", "Record not owned by the acting user — refusing to reschedule.");
 		return result.toJSON();
 	}
 
@@ -78,16 +101,17 @@ void digest_reschedule_item(String recordId, String module, String newDate)
 	return result.toJSON();
 }
 
-// --- digest_delete_followup(recordId, module, reason) ---
-void digest_delete_followup(String recordId, String module, String reason)
+// --- digest_delete_followup(recordId, module, reason, viewAsUserId) ---
+void digest_delete_followup(String recordId, String module, String reason, String viewAsUserId)
 {
 	// B9 — deletion always carries an explicit reason (logged here; the widget already showed
 	// a reschedule alternative before calling this).
+	actingUserId = resolveActor(viewAsUserId);
 	ownerId = getRecordOwnerId(module, recordId);
-	if (ownerId != ALEXIS_ID) {
+	if (ownerId != actingUserId) {
 		result = Map();
 		result.put("ok", false);
-		result.put("error", "Record not owned by Alexis — refusing to delete.");
+		result.put("error", "Record not owned by the acting user — refusing to delete.");
 		return result.toJSON();
 	}
 	info "Deleting " + module + " " + recordId + " — reason: " + reason;
@@ -98,21 +122,29 @@ void digest_delete_followup(String recordId, String module, String reason)
 	return result.toJSON();
 }
 
-// --- digest_apply_supervision_batch(decisions) ---
+// --- digest_apply_supervision_batch(decisions, viewAsUserId) ---
 // decisions: List of {recordId, module, dealId, decision: "reschedule"|"delete"}
-void digest_apply_supervision_batch(List decisions)
+void digest_apply_supervision_batch(List decisions, String viewAsUserId)
 {
+	actingUserId = resolveActor(viewAsUserId);
+	if (getUserProfile(actingUserId) != "Sales Manager") {
+		result = Map();
+		result.put("ok", false);
+		result.put("error", "Action réservée au profil Sales Manager.");
+		return result.toJSON();
+	}
+
 	results = List();
 	for each d in decisions {
 		recordId = d.get("recordId");
 		module = d.get("module");
 		ownerId = getRecordOwnerId(module, recordId);
-		if (ownerId != ALEXIS_ID) { continue; } // D4 — the consigne only ever touches Alexis's items
+		if (ownerId != actingUserId) { continue; } // D4 — the consigne only ever touches the acting user's items
 		if (d.get("decision") == "delete") {
 			results.add(zoho.crm.deleteRecord(module, recordId));
 		} else if (d.get("decision") == "reschedule") {
 			// resume date already computed in step 1 (D4 — lendemain ouvré de l'échéance du référent)
-			results.add(digest_reschedule_item(recordId, module, d.get("resumeDate")));
+			results.add(digest_reschedule_item(recordId, module, d.get("resumeDate"), viewAsUserId));
 		}
 	}
 	result = Map();
@@ -121,26 +153,35 @@ void digest_apply_supervision_batch(List decisions)
 	return result.toJSON();
 }
 
-// --- digest_redispatch_b2b_lost(dealId, aeId, note) ---
-void digest_redispatch_b2b_lost(String dealId, String aeId, String note)
+// --- digest_redispatch_b2b_lost(dealId, aeId, note, viewAsUserId) ---
+void digest_redispatch_b2b_lost(String dealId, String aeId, String note, String viewAsUserId)
 {
-	// D5 — deal owner NEVER changes on a B2B Lost redispatch, no follow-up is created for
-	// Alexis. This function deliberately has no owner-update step, unlike dispatch_initial.
-	postResult = postNoteWithChannelCheck(dealId, note);
+	actingUserId = resolveActor(viewAsUserId);
+	if (getUserProfile(actingUserId) != "Sales Manager") {
+		result = Map();
+		result.put("ok", false);
+		result.put("error", "Action réservée au profil Sales Manager.");
+		return result.toJSON();
+	}
+
+	// D5 — deal owner NEVER changes on a B2B Lost redispatch, no follow-up is created for the
+	// acting user. This function deliberately has no owner-update step, unlike dispatch_initial.
+	postResult = postNoteWithChannelCheck(dealId, note, actingUserId);
 	result = Map();
 	result.put("ok", true);
 	result.put("note", postResult);
 	return result.toJSON();
 }
 
-// --- digest_cancel_ghost_call(recordId) ---
-void digest_cancel_ghost_call(String recordId)
+// --- digest_cancel_ghost_call(recordId, viewAsUserId) ---
+void digest_cancel_ghost_call(String recordId, String viewAsUserId)
 {
+	actingUserId = resolveActor(viewAsUserId);
 	ownerId = getRecordOwnerId("Calls", recordId);
-	if (ownerId != ALEXIS_ID) {
+	if (ownerId != actingUserId) {
 		result = Map();
 		result.put("ok", false);
-		result.put("error", "Call not owned by Alexis — refusing to cancel.");
+		result.put("error", "Call not owned by the acting user — refusing to cancel.");
 		return result.toJSON();
 	}
 	resp = zoho.crm.deleteRecord("Calls", recordId);
@@ -152,8 +193,20 @@ void digest_cancel_ghost_call(String recordId)
 
 // ============================= shared helpers =============================
 
+// The real actor is always the invoking CRM session — never a client-supplied id — except that
+// Hassen (HASSEN_ID) may pass a `viewAsUserId` to explicitly test another profile's actions.
+// This is the ONLY place impersonation is allowed anywhere in this file.
+String resolveActor(String viewAsUserId)
+{
+	realUserId = zoho.loginuserid; // Deluge's own session variable — not client-controlled
+	if (realUserId == HASSEN_ID && viewAsUserId != null && viewAsUserId != "") {
+		return viewAsUserId;
+	}
+	return realUserId;
+}
+
 // A8 — channel decision, re-checked fresh on every call (never trust the nightly job's read).
-Map postNoteWithChannelCheck(String dealId, String note)
+Map postNoteWithChannelCheck(String dealId, String note, String actingUserId)
 {
 	costingThread = zoho.crm.searchRecords("Chats", "(Deals_Chat:equals:" + dealId + ")and(Name:equals:Costing)");
 
@@ -164,7 +217,7 @@ Map postNoteWithChannelCheck(String dealId, String note)
 		chatRef.put("id", costingThread.get(0).get("id"));
 		msg.put("Chats", chatRef);
 		msg.put("Message_Text", note.replaceAll("\n", "<br>"));
-		msg.put("AuthorID", ALEXIS_ID);
+		msg.put("AuthorID", actingUserId);
 		createResp = zoho.crm.createRecord("MessagesChat", msg);
 	} else {
 		note2 = Map();
@@ -179,7 +232,7 @@ Map postNoteWithChannelCheck(String dealId, String note)
 		createResp = zoho.crm.createNotesModule(note2); // TODO: confirm exact Deluge task name/signature for this on the current runtime
 	}
 
-	sendCompensationEmails(dealId, note);
+	sendCompensationEmails(dealId, note, actingUserId);
 
 	result = Map();
 	result.put("posted", true);
@@ -189,20 +242,21 @@ Map postNoteWithChannelCheck(String dealId, String note)
 // A4/A7 — one compensation email per non-CS tagged person (Important#5 exception for CS simples
 // lives in ../app/js/config.js requiresCompensationEmail; mirrored here server-side since this
 // is the actual send path).
-void sendCompensationEmails(String dealId, String note)
+void sendCompensationEmails(String dealId, String note, String actingUserId)
 {
 	tags = extractTags(note); // TODO: implement — regex "@([A-ZÀ-Ý][\\w' -]+)" against `note`,
 		// matched against the directory to resolve to an email + full name.
 	deal = zoho.crm.getRecord("Deals", dealId);
 	dealName = deal.get("Deal_Name");
 	dealUrl = "https://" + zoho.crm.getOrgVariable("Crm_domain") + "/crm/tab/Deals/" + dealId;
+	actor = getUserInfo(actingUserId);
 
 	for each person in tags {
 		if (person.get("is_cs_simple") == true) { continue; } // Important#5 exception
-		htmlBody = buildCompensationEmailHtml(person.get("first_name"), dealName, note, dealUrl);
+		htmlBody = buildCompensationEmailHtml(actor.get("name"), person.get("first_name"), dealName, note, dealUrl);
 		sendmail
 		[
-			from: "alexis.m@docshipper.com" // TODO: replace with the Gmail Connection send path (ANALYSIS.md §6) — Deluge's native sendmail won't originate from a real external Gmail address the way A7 requires
+			from: actor.get("email") // TODO: replace with the Gmail Connection send path (ANALYSIS.md §6) — Deluge's native sendmail won't originate from a real external Gmail address the way A7 requires
 			to: person.get("email")
 			subject: "You were mentioned in a chat - " + dealName
 			message: htmlBody
@@ -211,13 +265,13 @@ void sendCompensationEmails(String dealId, String note)
 	}
 }
 
-String buildCompensationEmailHtml(String firstName, String dealName, String note, String dealUrl)
+String buildCompensationEmailHtml(String actorName, String firstName, String dealName, String note, String dealUrl)
 {
 	noteHtml = note.replaceAll("\n", "<br>");
 	return "<div style=\"font-family: Arial, sans-serif; line-height: 1.6; margin: 20px; background-color: #f4f4f9; padding: 20px;\">"
 		+ "<div style=\"max-width: 600px; margin: 0 auto; padding: 20px; background: #ffffff; border-radius: 8px; box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);\">"
 		+ "<h1 style=\"color: #333333; text-align: center; margin-top: 0;\">Mention Notification</h1>"
-		+ "<p style=\"color: #555555;\"><strong>Alexis M.</strong> mentioned you in a chat.</p>"
+		+ "<p style=\"color: #555555;\"><strong>" + actorName + "</strong> mentioned you in a chat.</p>"
 		+ "<p style=\"color: #555555;\">Hello " + firstName + ",</p>"
 		+ "<p style=\"color: #555555;\">Deal: <strong>" + dealName + "</strong></p>"
 		+ "<p style=\"color: #555555;\">Message:</p>"
@@ -261,4 +315,23 @@ void createFollowup(String dealId, String ownerId, String type, String date)
 		task.put("Owner", owner);
 		zoho.crm.createRecord("Tasks", task);
 	}
+}
+
+// Live profile/name/email lookup — used both here (actor resolution, profile guards) and by
+// digest_collect.dg / digest_generate.dg (never trust a cached profile from a prior run).
+// TODO: confirm exact Deluge task name/signature for a single-user lookup on this runtime —
+// verified patterns in this file use getRecord/searchRecords for Tasks/Calls/Deals, not Users.
+String getUserProfile(String userId)
+{
+	user = zoho.crm.getUsers(userId); // TODO: confirm signature — may need a "type"/"index" arg on this Deluge runtime
+	return user.get("profile").get("name");
+}
+
+Map getUserInfo(String userId)
+{
+	user = zoho.crm.getUsers(userId); // TODO: same confirmation as getUserProfile
+	info = Map();
+	info.put("name", user.get("full_name"));
+	info.put("email", user.get("email"));
+	return info;
 }

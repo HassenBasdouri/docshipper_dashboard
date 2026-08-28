@@ -4,6 +4,12 @@
 
 let initPromise = null;
 
+// 4s cap on the handshake: outside a real CRM iframe (e.g. this widget opened standalone, or
+// the local `npm start` preview) `embeddedApp.init()` waits on a "PageLoad" postMessage from a
+// parent frame that will never arrive — it neither resolves nor rejects, so without a timeout
+// this would hang forever instead of falling back to local/dev behavior.
+const INIT_TIMEOUT_MS = 4000;
+
 export function initZoho() {
   if (initPromise) return initPromise;
   initPromise = new Promise((resolve) => {
@@ -11,8 +17,15 @@ export function initZoho() {
       resolve(false);
       return;
     }
-    window.ZOHO.embeddedApp.on("PageLoad", () => resolve(true));
-    window.ZOHO.embeddedApp.init().catch(() => resolve(false));
+    let settled = false;
+    const finish = (ready) => {
+      if (settled) return;
+      settled = true;
+      resolve(ready);
+    };
+    window.ZOHO.embeddedApp.on("PageLoad", () => finish(true));
+    window.ZOHO.embeddedApp.init().catch(() => finish(false));
+    setTimeout(() => finish(false), INIT_TIMEOUT_MS);
   });
   return initPromise;
 }

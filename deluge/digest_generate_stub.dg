@@ -1,0 +1,33 @@
+// digest_generate_stub.dg — fallback generator for any profile without real rules yet.
+//
+// No Claude call — a stub profile only ever shows "Tasks personnelles" (the one truly common
+// section), with blank, editable notes (opts.noteOnly:true, matching app/js/render.js's
+// "vigilance"-style read/write-but-no-suggested-text card). Zero LLM cost per stub profile
+// until someone actually writes that profile's house rules and gives it a real
+// digest_collect_<profile>.dg / digest_generate_<profile>.dg pair.
+
+Map digest_generate_stub(String userId, Map collected, String profileName)
+{
+	todayStr = collected.get("run_date");
+
+	tasksPersoRows = buildTasksPersoRows(collected.get("tasks_perso_deal_ids"), collected.get("tasks_perso_deal_facts"));
+
+	sections = List();
+	tasksSection = makeSection("tasks_perso", "card-list", "Tasks personnelles", "info", tasksPersoRows, "perso", null);
+	opts = Map();
+	opts.put("noteOnly", true);
+	tasksSection.put("opts", opts);
+	sections.add(tasksSection);
+
+	finalDigest = Map();
+	finalDigest.put("run_date", todayStr);
+	finalDigest.put("status", "delivered");
+	finalDigest.put("user_id", userId);
+	finalDigest.put("profile", profileName);
+	finalDigest.put("badge", Map());
+	finalDigest.put("sections", sections);
+	finalDigest.put("method_footer", Map());
+
+	finalDigestJson = finalDigest.toJSON();
+	return uploadDigest(userId, finalDigestJson, profileName, todayStr);
+}

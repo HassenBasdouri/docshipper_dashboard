@@ -1,0 +1,35 @@
+// digest_collect_004_sales.dg — 004-SALES profile's nightly CRM read.
+//
+// Same underlying primitives as the Sales Manager collector (own Tasks/Calls, Gold-heat
+// classification — see the shared helpers in digest_collect.dg) but scoped entirely to the
+// rep's own deals: no ownership-contention split (voie1/voie2/supervision), since a rep has no
+// equivalent of "is someone else on it" the way a manager supervising other AEs does. No
+// AE-redispatch/piloted split on B2B Lost either — the rep already owns it, there's no "who's
+// piloting this" question. (User-confirmed scope — see ../CLAUDE.md.)
+
+Map digest_collect_004_sales(String userId)
+{
+	today = zoho.currentdate;
+	todayStr = today.toString("yyyy-MM-dd");
+
+	result = Map();
+	result.put("run_date", todayStr);
+	result.put("profile", "004-SALES");
+
+	// tasks_perso — this rep's own open Tasks/Calls, same primitive as the Sales Manager badge.
+	own = collectOwnTasksCalls(userId);
+	result.put("tasks_perso_deal_ids", own.get("deal_ids"));
+	result.put("tasks_perso_deal_facts", own.get("deal_facts"));
+
+	// initial_own — this rep's own Initial-stage deals, same Gold-heat classification as the
+	// Sales Manager's dispatch queue, but shown read-only widget-side (see app/js/render.js's
+	// "initial-info" section type — no dispatch action, the rep already IS the AE).
+	initialDeals = zoho.crm.searchRecords("Deals", "(Owner:equals:" + userId + ")and(Stage:equals:Initial)");
+	result.put("initial_own_rows", classifyInitialDeals(initialDeals));
+
+	// b2b_lost_own — this rep's own B2B Lost deals, to work themselves.
+	b2bLost = zoho.crm.searchRecords("Deals", "(Owner:equals:" + userId + ")and(Stage:equals:B2B Lost)");
+	result.put("b2b_lost_own_rows", b2bLost);
+
+	return result;
+}

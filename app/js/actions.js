@@ -9,6 +9,15 @@
 import { ACTION_FUNCTIONS } from "./config.js";
 import { callFunction } from "./zohoApi.js";
 
+// Set only when the widget's own logged-in user is the test/admin viewer (Hassen) AND he's
+// actively previewing someone else's digest — see app/js/viewAs.js. Every other session leaves
+// this null, and Deluge ignores it unless the real, server-verified caller is that same viewer
+// id (deluge/digest_actions.dg) — so this can never let one ordinary user act as another.
+let viewAsUserId = null;
+export function setViewAsUser(id) {
+  viewAsUserId = id || null;
+}
+
 // E6 — "deals écumés" counter. Incremented on every applied follow-up action (including each
 // supervision row applied), decremented on undo. Never touched by dispatch, B2B redispatch,
 // or a plain dismiss.
@@ -28,7 +37,8 @@ function renderRemainingBadge() {
 async function runAction(cardEl, { functionName, params, collapseLabel, countsTowardCleared }) {
   setCardBusy(cardEl, true);
   try {
-    const result = await callFunction(functionName, params);
+    const callParams = viewAsUserId ? { ...params, viewAsUserId } : params;
+    const result = await callFunction(functionName, callParams);
     collapseCard(cardEl, collapseLabel, () => uncollapseCard(cardEl, countsTowardCleared), countsTowardCleared);
     return result;
   } catch (err) {

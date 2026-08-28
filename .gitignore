@@ -1,1 +1,8 @@
 node_modules/
+
+# Zoho CLI (zet) debug output
+ZET-debug.log
+
+# OS / editor artifacts
+.DS_Store
+Thumbs.db
