@@ -1,0 +1,111 @@
+// digest_generate.dg — nightly step 2 (runs immediately after digest_collect.dg).
+//
+// The ONLY LLM call in the whole daily pipeline. Takes the deterministic Map from step 1 and
+// asks Claude for just the judgment-requiring text: dispatch/follow-up note wording (C2ter
+// style), B2B Lost heat + "why lost" narrative, and the "où ça en est" chat-tail summaries
+// (D4bis). Everything else in the final JSON was already decided in step 1 without touching
+// an LLM.
+//
+// Cost levers used here (see ANALYSIS.md §3):
+//  - System prompt is split into a STABLE block (house rules, never changes day to day) with
+//    cache_control so Anthropic serves it at cache-read pricing on every day after the first,
+//    and a small DYNAMIC block (today's collected facts) that's never cached.
+//  - Model defaults to claude-opus-5. This is the single largest cost lever in this job if
+//    output quality holds at a cheaper tier (e.g. claude-sonnet-5) — that's a deliberate
+//    tradeoff for the team to make, not something to change silently; swap MODEL_ID below only
+//    on an explicit decision.
+//  - One call, structured JSON output — no sub-agents, no free-written HTML.
+//
+// TODO before first real run: store the Anthropic API key as a secure custom variable /
+// Connection rather than inline; confirm invokeurl is allowed to api.anthropic.com on this org
+// (Zoho's "Allowed URLs" allowlist may need updating); verify Deluge's exact JSON<->Map
+// conversion built-ins available on this Deluge runtime version (used loosely below as
+// `.toMap()` / `.toJSON()`).
+
+collected = digest_collect(); // TODO: replace with the actual chaining mechanism you deploy (see deluge/README.md)
+
+MODEL_ID = "claude-opus-5";
+ANTHROPIC_API_KEY = zoho.crm.getOrgVariable("Anthropic_api_key"); // store as an org variable, not inline
+ANTHROPIC_VERSION = "2023-06-01";
+
+stableSystemPrompt = zoho.crm.getOrgVariable("Digest_house_rules_v24_1"); // paste the static v24.1 rulebook text in as an org variable once, so this file never embeds 632 lines inline
+
+systemBlocks = List();
+stableBlock = Map();
+stableBlock.put("type", "text");
+stableBlock.put("text", stableSystemPrompt);
+cacheControl = Map();
+cacheControl.put("type", "ephemeral");
+stableBlock.put("cache_control", cacheControl);
+systemBlocks.add(stableBlock);
+
+userContent = "Voici les faits du jour, déjà triés (D1-D8) et vérifiés par requête CRM fraîche. "
+	+ "Pour chaque item, rédige uniquement le texte demandé (note de dispatch C2ter, "
+	+ "\"où ça en est\" D4bis, raison de perte B2B Lost) et renvoie UNIQUEMENT un objet JSON, "
+	+ "sans texte autour, respectant exactement ce schéma : "
+	+ "{\"initial\":[{\"deal_id\":\"\",\"note\":\"\",\"gold_estimate\":\"\"}],"
+	+ "\"voie1\":[{\"deal_id\":\"\",\"passe\":[],\"propose\":\"\",\"note\":\"\"}],"
+	+ "\"voie2\":[...même forme...],"
+	+ "\"supervision_rows\":[{\"deal_id\":\"\",\"ou_ca_en_est_line\":\"\",\"ou_ca_en_est_waiting\":\"\"}],"
+	+ "\"b2b_lost_redispatch\":[{\"deal_id\":\"\",\"heat\":\"\",\"why_lost\":\"\",\"angle\":\"\",\"note\":\"\"}]}"
+	+ "\n\nFaits du jour (JSON) :\n" + collected.toJSON();
+
+messages = List();
+userMsg = Map();
+userMsg.put("role", "user");
+userMsg.put("content", userContent);
+messages.add(userMsg);
+
+requestBody = Map();
+requestBody.put("model", MODEL_ID);
+requestBody.put("max_tokens", 16000);
+requestBody.put("system", systemBlocks);
+requestBody.put("messages", messages);
+outputConfig = Map();
+outputConfig.put("effort", "high");
+requestBody.put("output_config", outputConfig);
+
+headers = Map();
+headers.put("x-api-key", ANTHROPIC_API_KEY);
+headers.put("anthropic-version", ANTHROPIC_VERSION);
+headers.put("content-type", "application/json");
+
+response = invokeurl
+[
+	url: "https://api.anthropic.com/v1/messages"
+	type: POST
+	parameters: requestBody.toString()
+	headers: headers
+];
+
+// Verify caching worked (should read a large cache_read_input_tokens after day 1):
+info "cache_read_input_tokens: " + response.get("usage").get("cache_read_input_tokens");
+info "cache_creation_input_tokens: " + response.get("usage").get("cache_creation_input_tokens");
+
+contentBlocks = response.get("content");
+writtenText = "";
+for each block in contentBlocks {
+	if (block.get("type") == "text") { writtenText = block.get("text"); }
+}
+written = writtenText.toMap(); // parse the model's structured JSON output
+
+// --- Merge step 1's facts with step 2's text into the final digest JSON (ANALYSIS.md §4). ---
+finalDigest = mergeCollectedAndWritten(collected, written); // TODO: implement the merge — walk each
+	// section of `collected`, look up the matching entry in `written` by deal_id, and combine.
+
+finalDigestJson = finalDigest.toJSON();
+
+// --- Upload to WorkDrive and point the org variable at it (../ANALYSIS.md §4). ---
+fileName = "digest_run_" + zoho.currentdate.toString("yyyy-MM-dd") + ".json";
+uploadResp = invokeurl
+[
+	url: "https://www.zohoapis.com/workdrive/api/v1/upload" // TODO: confirm exact WorkDrive upload endpoint/params for this org's plan, and the target folder id
+	type: POST
+	parameters: {"content": finalDigestJson, "filename": fileName, "parent_id": zoho.crm.getOrgVariable("Digest_workdrive_folder_id")}.toString()
+	connection: "workdrive" // TODO: create this Connection (OAuth, WorkDrive scope) once
+];
+
+publicLink = uploadResp.get("permalink"); // TODO: confirm this is the public/shared-link field name for this API version
+zoho.crm.updateOrgVariable("Digest_url", publicLink); // TODO: confirm the exact Deluge task name for updating an org variable on this Deluge runtime
+
+info "Digest published: " + publicLink;

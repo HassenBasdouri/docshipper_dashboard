@@ -1,0 +1,264 @@
+// digest_actions.dg — one Custom Function per widget button (see ../app/js/config.js
+// ACTION_FUNCTIONS and ../app/js/actions.js). Each function does exactly one CRM write and
+// returns immediately — no LLM call here; the note text was already written by
+// digest_generate.dg the night before and arrives as a function argument.
+//
+// Shared safety rules baked into every function below (from the v24.1 spec, Important#2 / B6 /
+// A8 / A7 / B7):
+//  - Never write to a Task/Call whose Owner.id isn't Alexis's id — re-checked here even though
+//    the widget already filtered client-side, since the CRM can have moved since the digest
+//    was generated (Important#3).
+//  - A8 channel check (Costing thread present vs. absent) runs fresh on every note post, never
+//    cached from the nightly job.
+//  - A7 compensation email fires after every tagging note, except when the only tags are CS
+//    simples (config.js TEAM.cs).
+//  - B7: any date this function receives should already be a weekday; these functions don't
+//    silently correct a bad date, they just apply it — validation happens widget-side.
+
+ALEXIS_ID = "4664241000189490004";
+
+// --- digest_dispatch_initial(dealId, aeId, note, followup) ---
+void digest_dispatch_initial(String dealId, String aeId, String note, Map followup)
+{
+	// B2 — single-button Initial dispatch: owner change + channel-aware note + A7 email.
+	dealUpdate = Map();
+	dealUpdate.put("id", dealId);
+	ownerMap = Map();
+	ownerMap.put("id", aeId);
+	dealUpdate.put("Owner", ownerMap);
+	updateResp = zoho.crm.updateRecord("Deals", dealId, dealUpdate, {"trigger": {"workflow"}});
+
+	postResult = postNoteWithChannelCheck(dealId, note);
+
+	if (followup != null && followup.get("type") != null) {
+		createFollowup(dealId, ALEXIS_ID, followup.get("type"), followup.get("date"));
+	}
+
+	result = Map();
+	result.put("ok", true);
+	result.put("owner_update", updateResp);
+	result.put("note", postResult);
+	return result.toJSON();
+}
+
+// --- digest_post_followup_note(dealId, note, targetTag) ---
+void digest_post_followup_note(String dealId, String note, String targetTag)
+{
+	postResult = postNoteWithChannelCheck(dealId, note);
+	result = Map();
+	result.put("ok", true);
+	result.put("note", postResult);
+	return result.toJSON();
+}
+
+// --- digest_reschedule_item(recordId, module, newDate) ---
+void digest_reschedule_item(String recordId, String module, String newDate)
+{
+	ownerId = getRecordOwnerId(module, recordId);
+	if (ownerId != ALEXIS_ID) {
+		// B6 — never touch another owner's item, even if the widget somehow sent one.
+		result = Map();
+		result.put("ok", false);
+		result.put("error", "Record not owned by Alexis — refusing to reschedule.");
+		return result.toJSON();
+	}
+
+	update = Map();
+	update.put("id", recordId);
+	if (module == "Calls") {
+		update.put("Call_Start_Time", newDate + "T00:00:00+07:00");
+		update.put("Outgoing_Call_Status", "Scheduled"); // F. — without this it stays "Overdue"
+	} else {
+		update.put("Due_Date", newDate);
+	}
+	resp = zoho.crm.updateRecord(module, recordId, update);
+	result = Map();
+	result.put("ok", true);
+	result.put("update", resp);
+	return result.toJSON();
+}
+
+// --- digest_delete_followup(recordId, module, reason) ---
+void digest_delete_followup(String recordId, String module, String reason)
+{
+	// B9 — deletion always carries an explicit reason (logged here; the widget already showed
+	// a reschedule alternative before calling this).
+	ownerId = getRecordOwnerId(module, recordId);
+	if (ownerId != ALEXIS_ID) {
+		result = Map();
+		result.put("ok", false);
+		result.put("error", "Record not owned by Alexis — refusing to delete.");
+		return result.toJSON();
+	}
+	info "Deleting " + module + " " + recordId + " — reason: " + reason;
+	resp = zoho.crm.deleteRecord(module, recordId);
+	result = Map();
+	result.put("ok", true);
+	result.put("delete", resp);
+	return result.toJSON();
+}
+
+// --- digest_apply_supervision_batch(decisions) ---
+// decisions: List of {recordId, module, dealId, decision: "reschedule"|"delete"}
+void digest_apply_supervision_batch(List decisions)
+{
+	results = List();
+	for each d in decisions {
+		recordId = d.get("recordId");
+		module = d.get("module");
+		ownerId = getRecordOwnerId(module, recordId);
+		if (ownerId != ALEXIS_ID) { continue; } // D4 — the consigne only ever touches Alexis's items
+		if (d.get("decision") == "delete") {
+			results.add(zoho.crm.deleteRecord(module, recordId));
+		} else if (d.get("decision") == "reschedule") {
+			// resume date already computed in step 1 (D4 — lendemain ouvré de l'échéance du référent)
+			results.add(digest_reschedule_item(recordId, module, d.get("resumeDate")));
+		}
+	}
+	result = Map();
+	result.put("ok", true);
+	result.put("applied", results.size());
+	return result.toJSON();
+}
+
+// --- digest_redispatch_b2b_lost(dealId, aeId, note) ---
+void digest_redispatch_b2b_lost(String dealId, String aeId, String note)
+{
+	// D5 — deal owner NEVER changes on a B2B Lost redispatch, no follow-up is created for
+	// Alexis. This function deliberately has no owner-update step, unlike dispatch_initial.
+	postResult = postNoteWithChannelCheck(dealId, note);
+	result = Map();
+	result.put("ok", true);
+	result.put("note", postResult);
+	return result.toJSON();
+}
+
+// --- digest_cancel_ghost_call(recordId) ---
+void digest_cancel_ghost_call(String recordId)
+{
+	ownerId = getRecordOwnerId("Calls", recordId);
+	if (ownerId != ALEXIS_ID) {
+		result = Map();
+		result.put("ok", false);
+		result.put("error", "Call not owned by Alexis — refusing to cancel.");
+		return result.toJSON();
+	}
+	resp = zoho.crm.deleteRecord("Calls", recordId);
+	result = Map();
+	result.put("ok", true);
+	result.put("delete", resp);
+	return result.toJSON();
+}
+
+// ============================= shared helpers =============================
+
+// A8 — channel decision, re-checked fresh on every call (never trust the nightly job's read).
+Map postNoteWithChannelCheck(String dealId, String note)
+{
+	costingThread = zoho.crm.searchRecords("Chats", "(Deals_Chat:equals:" + dealId + ")and(Name:equals:Costing)");
+
+	if (costingThread != null && costingThread.size() > 0) {
+		msg = Map();
+		msg.put("Name", "Parent Message-" + costingThread.get(0).get("id") + "-" + dealId);
+		chatRef = Map();
+		chatRef.put("id", costingThread.get(0).get("id"));
+		msg.put("Chats", chatRef);
+		msg.put("Message_Text", note.replaceAll("\n", "<br>"));
+		msg.put("AuthorID", ALEXIS_ID);
+		createResp = zoho.crm.createRecord("MessagesChat", msg);
+	} else {
+		note2 = Map();
+		note2.put("Note_Title", "DISPATCH — note pour l'AE");
+		note2.put("Note_Content", note);
+		parentId = Map();
+		parentModule = Map();
+		parentModule.put("api_name", "Deals");
+		parentId.put("id", dealId);
+		parentId.put("module", parentModule);
+		note2.put("Parent_Id", parentId);
+		createResp = zoho.crm.createNotesModule(note2); // TODO: confirm exact Deluge task name/signature for this on the current runtime
+	}
+
+	sendCompensationEmails(dealId, note);
+
+	result = Map();
+	result.put("posted", true);
+	return result;
+}
+
+// A4/A7 — one compensation email per non-CS tagged person (Important#5 exception for CS simples
+// lives in ../app/js/config.js requiresCompensationEmail; mirrored here server-side since this
+// is the actual send path).
+void sendCompensationEmails(String dealId, String note)
+{
+	tags = extractTags(note); // TODO: implement — regex "@([A-ZÀ-Ý][\\w' -]+)" against `note`,
+		// matched against the directory to resolve to an email + full name.
+	deal = zoho.crm.getRecord("Deals", dealId);
+	dealName = deal.get("Deal_Name");
+	dealUrl = "https://" + zoho.crm.getOrgVariable("Crm_domain") + "/crm/tab/Deals/" + dealId;
+
+	for each person in tags {
+		if (person.get("is_cs_simple") == true) { continue; } // Important#5 exception
+		htmlBody = buildCompensationEmailHtml(person.get("first_name"), dealName, note, dealUrl);
+		sendmail
+		[
+			from: "alexis.m@docshipper.com" // TODO: replace with the Gmail Connection send path (ANALYSIS.md §6) — Deluge's native sendmail won't originate from a real external Gmail address the way A7 requires
+			to: person.get("email")
+			subject: "You were mentioned in a chat - " + dealName
+			message: htmlBody
+			content type: "html"
+		];
+	}
+}
+
+String buildCompensationEmailHtml(String firstName, String dealName, String note, String dealUrl)
+{
+	noteHtml = note.replaceAll("\n", "<br>");
+	return "<div style=\"font-family: Arial, sans-serif; line-height: 1.6; margin: 20px; background-color: #f4f4f9; padding: 20px;\">"
+		+ "<div style=\"max-width: 600px; margin: 0 auto; padding: 20px; background: #ffffff; border-radius: 8px; box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);\">"
+		+ "<h1 style=\"color: #333333; text-align: center; margin-top: 0;\">Mention Notification</h1>"
+		+ "<p style=\"color: #555555;\"><strong>Alexis M.</strong> mentioned you in a chat.</p>"
+		+ "<p style=\"color: #555555;\">Hello " + firstName + ",</p>"
+		+ "<p style=\"color: #555555;\">Deal: <strong>" + dealName + "</strong></p>"
+		+ "<p style=\"color: #555555;\">Message:</p>"
+		+ "<div style=\"background: #f1f1f1; padding: 10px; border-radius: 5px; margin-top: 10px; color: #333333;\">" + noteHtml + "</div>"
+		+ "<div style=\"text-align: center; margin-top: 20px;\"><p style=\"color: #555555;\">Click below to view deal details:</p>"
+		+ "<p><a href=\"" + dealUrl + "\">Open Deal</a></p></div>"
+		+ "<p style=\"color: #555555;\">Thank you,</p><p style=\"color: #555555;\">Tech Team</p></div></div>";
+}
+
+String getRecordOwnerId(String module, String recordId)
+{
+	rec = zoho.crm.getRecord(module, recordId);
+	return rec.get("Owner").get("id");
+}
+
+void createFollowup(String dealId, String ownerId, String type, String date)
+{
+	dealRef = Map();
+	dealRef.put("id", dealId);
+	if (type == "call") {
+		call = Map();
+		call.put("Subject", "Call scheduled");
+		call.put("Call_Type", "Outbound");
+		call.put("Call_Start_Time", date + "T00:00:00+07:00");
+		call.put("Call_Duration", "00:00");
+		call.put("Outgoing_Call_Status", "Scheduled");
+		call.put("What_Id", dealRef);
+		call.put("$se_module", "Deals");
+		owner = Map();
+		owner.put("id", ownerId);
+		call.put("Owner", owner);
+		zoho.crm.createRecord("Calls", call);
+	} else if (type == "task") {
+		task = Map();
+		task.put("Subject", "Suivi digest");
+		task.put("Due_Date", date);
+		task.put("What_Id", dealRef);
+		task.put("$se_module", "Deals");
+		owner = Map();
+		owner.put("id", ownerId);
+		task.put("Owner", owner);
+		zoho.crm.createRecord("Tasks", task);
+	}
+}

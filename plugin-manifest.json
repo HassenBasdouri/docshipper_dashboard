@@ -1,0 +1,11 @@
+{
+  "service": "CRM",
+  "isConfigNeeded": false,
+  "plugin-manifest": {
+    "name": "DocShipper Digest",
+    "version": "1.0.0",
+    "type": "web",
+    "src": "app/widget.html",
+    "editablefields": []
+  }
+}

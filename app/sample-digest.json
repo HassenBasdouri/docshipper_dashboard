@@ -1,0 +1,113 @@
+{
+  "run_date": "2026-08-28",
+  "status": "delivered",
+  "badge": {
+    "total": 9,
+    "very_grave": false,
+    "pills": [
+      { "label": "bloqués", "count": 2, "tone": "crit" },
+      { "label": "à toi seule", "count": 1, "tone": "warn" },
+      { "label": "tasks perso", "count": 2 },
+      { "label": "supervision", "count": 2, "tone": "good" },
+      { "label": "deals clos", "count": 2 }
+    ]
+  },
+  "initial": {
+    "groups": [
+      {
+        "heat": "gold",
+        "deals": [
+          {
+            "deal_id": "1",
+            "ds": "DS-58900",
+            "client": "Sample Client",
+            "route": "Shanghai → Le Havre · 40' HQ · 1200kg · CIF · Web · 27/08",
+            "suggested_ae_id": "4664241000329095001",
+            "note": "- FCL déjà défini (40' HQ)\n- Docs fournis : facture, packing list\n- Manquent : code HS, proforma",
+            "gold_estimate": "Composite 4526 USD/40' (+4% s/s) — indicative, hors droits, à confirmer.",
+            "followup": { "type": "task", "date": "2026-08-31" }
+          }
+        ]
+      }
+    ]
+  },
+  "voie1": [
+    {
+      "deal_id": "2",
+      "ds": "DS-57854",
+      "client": "Gerard GIONET",
+      "stage": "Shipping Operation",
+      "route": "",
+      "passe": ["Joshua SINAMBAN attend validation des expenses.", "Vol booké au 01/09, livraison le 02/09."],
+      "propose": "Valider les expenses pour débloquer.",
+      "note": "@Amal BEN AMOR expenses en attente — vol le 01/09.",
+      "target_tag": "Amal BEN AMOR",
+      "record_id": "3001",
+      "record_module": "Calls",
+      "reschedulable": true,
+      "deletable": true,
+      "followup": { "type": "call", "date": "2026-08-29" }
+    }
+  ],
+  "voie2": [],
+  "tasks_perso": [],
+  "supervision": {
+    "groups_by_referent": [
+      {
+        "referent": "Jordan Dubois",
+        "rows": [
+          {
+            "deal_id": "4",
+            "ds": "DS-52568",
+            "client": "Lina Georges",
+            "stage": "Final quote sent",
+            "covered_by": "Task — passage en Won demandé le 25/08",
+            "ou_ca_en_est_line": "Jordan a demandé le passage en Won le 25/08.",
+            "ou_ca_en_est_waiting": "validation Won",
+            "resume_date": "2026-09-01",
+            "record_id": "5001",
+            "record_module": "Calls"
+          }
+        ]
+      }
+    ]
+  },
+  "b2b_lost_redispatch": [
+    {
+      "deal_id": "6",
+      "ds": "DS-39814",
+      "client": "BUCH",
+      "route": "Qingdao → Illzach",
+      "heat": "chaud",
+      "why_lost": "Aucune raison de perte tracée — s'arrête sur PDV 6522 EUR le 16/07/2025.",
+      "angle": "Finaliser l'achat conteneur, proposer l'ouverture usine turque.",
+      "old_owner": "Constance Dittrich",
+      "docs": "PDV",
+      "missing": "code HS, inventaire valorisé",
+      "suggested_ae_id": "4664241000329095001",
+      "note": "@Jordan Dubois B2B lost à recontacter — c'était à Constance Dittrich."
+    }
+  ],
+  "b2b_lost_piloted": [
+    { "deal_id": "7", "ds": "DS-33161", "client": "Sample", "ae": "Yanis Huin", "item": "Call B2B LOST 05/09" }
+  ],
+  "deals_closed": [
+    { "deal_id": "8", "ds": "DS-58140", "client": "Sample", "stage": "Lost", "closed_by": "Alexis M.", "closed_date": "2026-08-20", "record_id": "9001" }
+  ],
+  "vigilance": [
+    {
+      "deal_id": "10",
+      "ds": "DS-55520",
+      "client": "Sample Ops",
+      "stage": "Shipping Operation",
+      "route": "",
+      "note": "112 jours, sans OP, sans SI, zéro fil mail.",
+      "note_editable": false
+    }
+  ],
+  "method_footer": {
+    "counts": { "voie1": 1, "voie2": 0, "supervision": 1, "b2b_lost_redispatch": 1 },
+    "anomalies": ["DS-58203 SI Date antérieure au stage"],
+    "note": "Échantillon local — pas un vrai run."
+  }
+}

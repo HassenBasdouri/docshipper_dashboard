@@ -102,16 +102,41 @@ itself makes **zero live COQL calls** when Alexis opens it.
   — the markup is a static asset that only changes when *we* edit the template, not something
   regenerated (and re-Playwright-tested) every morning.
 
-## 4. Data model
+## 4. Data model — WorkDrive, not a custom module
 
-New custom module (or a single-record custom module if history isn't needed): **`Digest_Run`**
-- `Run_Date`
-- `Badge_JSON` — counts/pills for the header
-- `Sections_JSON` — one block per section (Initial dispatch, Voie 1/2/3, B2B Lost ×3, Vigilance),
-  each item carrying the pre-written note text, target owner id, suggested follow-up date, and
-  the deterministic facts ("est-ce que c'est passé" bullets) computed in step 1
-- `Status` — draft / delivered / stale (if the nightly job fails, widget can show last-good run
-  with a visible staleness banner rather than silently going empty)
+Reusing the pattern from the existing "Employee Activity Audit" widget (`Audit_url` org
+variable → WorkDrive file → client-side fetch with fallback transports) instead of a custom
+CRM module. This avoids needing custom-module creation rights and keeps the widget's read path
+identical in shape to code already proven in this org.
+
+- The nightly Deluge job writes one JSON file per day to a fixed WorkDrive folder (e.g.
+  `digest_run_2026-08-28.json`) and updates a **`Digest_url`** CRM org variable to point at it
+  (public/shared link, same mechanism `Audit_url` uses today).
+- JSON shape — one block per E1 output section, holding **facts + pre-written note text**, never
+  markup:
+  ```json
+  {
+    "run_date": "2026-08-28",
+    "status": "delivered",
+    "badge": { "total": 9, "very_grave": false, "pills": [...] },
+    "initial": { "groups": [ { "heat": "gold", "deals": [ { "ds": "DS-58854", ... } ] } ] },
+    "voie1": [ { "ds": "...", "passe": [...], "propose": "...", "note": "...", "target": {...}, "followup": {...} } ],
+    "voie2": [ ... ],
+    "tasks_perso": [ ... ],
+    "supervision": { "groups_by_referent": [ { "referent": "...", "rows": [ ... ] } ] },
+    "b2b_lost_redispatch": [ { "ds": "...", "old_owner": "...", "heat": "chaud", "why_lost": "...", "angle": "...", "note": "..." } ],
+    "b2b_lost_piloted": [ ... ],
+    "deals_closed": [ ... ],
+    "vigilance": [ ... ],
+    "method_footer": { "counts": {...}, "anomalies": [...] }
+  }
+  ```
+- Widget reads this via the same multi-fallback loader style as `fileLoader.js`
+  (`CONNECTION.invoke` → `CONNECTOR.invokeAPI` → `HTTP.get` → `fetch`), parses JSON instead of
+  CSV, and renders a **fixed template** — zero COQL calls on open.
+- If the nightly job fails, last-good JSON stays in place with `status` still `"delivered"` from
+  its own run date; the widget shows a staleness banner when `run_date` isn't today rather than
+  going empty.
 
 ## 5. Action flow (native, no copy-paste)
 
@@ -144,7 +169,8 @@ Example — "Dispatcher ce deal →" on an Initial:
 - **Claude API access for the nightly Deluge job**: this needs a real Anthropic API key (server-
   side), separate from your interactive Claude usage, called via Deluge's `invokeurl`.
 
-Once these are confirmed I'll scaffold: the Deluge collector function, the Deluge
-LLM-call function (with the cached system prompt extracted from the v24.1 doc), the
-`Digest_Run` module definition, and the widget (HTML/CSS/JS + `plugin-manifest.json`) in this
-repo.
+Once these are confirmed, the remaining wiring is: creating the `Digest_url` org variable,
+pointing the Deluge jobs at a real Anthropic API key and WorkDrive folder, and connecting the
+action functions in `deluge/digest_actions.dg` to the widget's buttons in Zoho CRM's function
+list. The widget scaffold, loader, and Deluge reference sources are now in this repo (see
+`CLAUDE.md`).

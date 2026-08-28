@@ -1,0 +1,112 @@
+// digest_collect.dg — nightly step 1 (scheduled ~07:00, runs before digest_generate.dg)
+//
+// All CRM reading happens here, in as few, wide COQL calls as possible — this is the credit-
+// cost-sensitive half of the job (see ANALYSIS.md §2/§3). Everything that can be decided
+// without judgment (owner ids, Gold routing, weekday dates, D1-D8 bucket assignment) is
+// decided HERE in code, not left for the LLM step. Output is one Map, cached into a custom
+// variable ("digest_collect_cache") for digest_generate.dg to pick up.
+//
+// TODO before first real run: confirm every module/field name against the live org (they're
+// taken from the v24.1 policy doc's F. section, verified there on 26/08 — schema may have
+// moved since).
+
+alexisId = "4664241000189490004";
+today = zoho.currentdate;
+todayStr = today.toString("yyyy-MM-dd");
+
+result = Map();
+result.put("run_date", todayStr);
+
+// --- 1. Alexis's active Tasks/Calls (the "badge") — ONE wide query each, not per-deal. ---
+tasks = zoho.crm.searchRecords("Tasks", "(Owner:equals:" + alexisId + ")and(Status:equals:Not Started)");
+calls = zoho.crm.searchRecords("Calls", "(Owner:equals:" + alexisId + ")and(Outgoing_Call_Status:in:Scheduled,Overdue)");
+
+dealIds = List();
+for each t in tasks { if (t.get("What_Id") != null) { dealIds.add(t.get("What_Id").get("id")); } }
+for each c in calls { if (c.get("What_Id") != null) { dealIds.add(c.get("What_Id").get("id")); } }
+dealIds = dealIds.distinct();
+
+// --- 2. Stage + key fields for every deal in scope — one COQL, id in (...), not one call/deal. ---
+dealFacts = Map();
+if (dealIds.size() > 0) {
+	idList = dealIds.toString().replaceAll("\\[|\\]", "");
+	dealsQuery = "select id, Deal_Name, Stage, Owner, Country_of_Departure, Country_of_Arrival, "
+		+ "Total_Weight_KG, Volume_m3, Value_of_goods, Incoterm_of_departure, Incoterms_of_arrival, "
+		+ "Shipping_Instructions_Date, Last_Activity_Time from Deals where id in (" + idList + ") limit 2000";
+	dealRows = zoho.crm.getRecords("Deals", 1, 200); // TODO: swap to a COQL invokeurl call using dealsQuery above once the connector path is confirmed
+	for each d in dealRows {
+		dealFacts.put(d.get("id"), d);
+	}
+}
+
+// --- 3. Deterministic routing (D1-D8) — owner checks, Gold, weekday math. No LLM here. ---
+voie1Candidates = List();
+voie2Candidates = List();
+supervisionCandidates = List();
+
+for each dealId in dealIds {
+	deal = dealFacts.get(dealId);
+	if (deal == null) { continue; }
+	stage = deal.get("Stage");
+	if (stage == "Lost" || stage == "Junk" || stage == "Won") { continue; } // pipeline counts always exclude these
+
+	// B6: who else has an active item on this deal? (batched by ~22, per F.)
+	otherActiveItems = zoho.crm.searchRecords("Tasks", "(What_Id:equals:" + dealId + ")and(Status:equals:Not Started)");
+	otherActiveCalls = zoho.crm.searchRecords("Calls", "(What_Id:equals:" + dealId + ")and(Outgoing_Call_Status:in:Scheduled,Overdue)");
+	someoneElseIsOnIt = false;
+	for each item in otherActiveItems { if (item.get("Owner").get("id") != alexisId) { someoneElseIsOnIt = true; } }
+	for each item in otherActiveCalls { if (item.get("Owner").get("id") != alexisId) { someoneElseIsOnIt = true; } }
+
+	row = Map();
+	row.put("deal_id", dealId);
+	row.put("deal", deal);
+
+	if (someoneElseIsOnIt) {
+		supervisionCandidates.add(row); // D4 — voie 3, supervision
+	} else {
+		voie2Candidates.add(row); // D3 — voie 2, personne d'autre dessus
+	}
+	// D2 (voie 1 — question attend Alexis / retard réel) needs the chat-tail read; left for the
+	// sub-step below since it's per-deal I/O, batch it rather than looping request-per-request
+	// in production — kept simple here as a placeholder loop.
+}
+
+// --- 4. Initial (dispatch queue) — Gold detection is pure data, no LLM needed for the flag. ---
+initialDeals = zoho.crm.searchRecords("Deals", "(Owner:equals:" + alexisId + ")and(Stage:equals:Initial)");
+goldPairs = {"China": true, "Vietnam": true, "Hong Kong": true}; // TODO: replace with the real Asia<->Europe country-pair table
+initialRows = List();
+for each deal in initialDeals {
+	dep = deal.get("Country_of_Departure");
+	arr = deal.get("Country_of_Arrival");
+	isGold = (goldPairs.containKey(dep) || goldPairs.containKey(arr)); // placeholder — real rule: Asia<->Europe, excluding Middle East
+	row = Map();
+	row.put("deal_id", deal.get("id"));
+	row.put("deal", deal);
+	row.put("heat", isGold ? "gold" : "moyen"); // TODO: full C1 speed-tiering (rapide/moyen/prudence/douce)
+	initialRows.add(row);
+}
+
+// --- 5. B2B Lost, queried independently of the badge (D5 — must show even off-badge). ---
+b2bLost = zoho.crm.searchRecords("Deals", "(Owner:equals:" + alexisId + ")and(Stage:equals:B2B Lost)");
+b2bRedispatchRows = List();
+b2bPilotedRows = List();
+for each deal in b2bLost {
+	activeAeItems = zoho.crm.searchRecords("Tasks", "(What_Id:equals:" + deal.get("id") + ")and(Status:equals:Not Started)");
+	if (activeAeItems.size() > 0) {
+		b2bPilotedRows.add(deal); // already piloted by an AE — info only
+	} else {
+		b2bRedispatchRows.add(deal); // needs the "why lost" read + re-dispatch note (step 2)
+	}
+}
+
+result.put("voie1_candidates", voie1Candidates);
+result.put("voie2_candidates", voie2Candidates);
+result.put("supervision_candidates", supervisionCandidates);
+result.put("initial_rows", initialRows);
+result.put("b2b_redispatch_candidates", b2bRedispatchRows);
+result.put("b2b_piloted_rows", b2bPilotedRows);
+
+// Hand off to digest_generate.dg. TODO: pick the actual hand-off mechanism your Zoho plan
+// supports — a chained function call (deluge.executeFunction) if run in the same schedule, or
+// a short-lived custom variable / temp WorkDrive file if run as two separate schedules.
+return result;
