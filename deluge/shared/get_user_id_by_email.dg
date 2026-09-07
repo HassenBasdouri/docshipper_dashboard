@@ -1,0 +1,28 @@
+// get_user_id_by_email.dg — resolves a CRM user's numeric record id from their login email.
+//
+// Needed because zoho.loginuserid returns the user's EMAIL, not their CRM record id, inside a
+// Deluge custom function — confirmed via Zoho's own community documentation (there's a
+// long-running, unresolved community thread titled almost exactly "zoho.loginuserid does not
+// work because it returns the email"; there is no single official built-in for "give me the
+// numeric id of whoever is actually invoking this function"). Used by resolve_actor.dg.
+//
+// zoho.crm.getRecords("users", ...) returns a Map with a "users" key holding the list, not the
+// list directly — confirmed live (iterating the raw Map result was silently a no-op).
+//
+// TODO before first real run: zoho.crm.getRecords("users", ...) is noted in some Zoho reference
+// material as available only on Zoho CRM Vertical Solutions editions — confirm this works on
+// this org's actual CRM edition; if not, an alternative (a COQL query, or a small
+// hand-maintained email->id lookup org variable alongside Digest_active_users) will be needed.
+// Also TODO: this only fetches the first 200 active users — loop additional pages if this org
+// ever has more than 200 active users.
+
+string standalone.getUserIdByEmail(String email)
+{
+	users = zoho.crm.getRecords("users", 1, 200, {"type": "ActiveUsers"});
+	for each u in users.get("users") {
+		if (u.get("email") == email) {
+			return u.get("id");
+		}
+	}
+	return null;
+}

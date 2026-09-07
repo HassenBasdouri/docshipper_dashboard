@@ -1,0 +1,49 @@
+// upload_digest.dg — uploads one user's final digest JSON to WorkDrive and returns the
+// {url, run_date, profile} entry the nightly loop stores in Digest_registry for that user.
+// Reused by every profile's generator.
+//
+// Uses Deluge's native zoho.workdrive.uploadFile task (String.toFile() turns the JSON string into
+// an uploadable file blob) rather than a generic invokeurl POST to WorkDrive's REST endpoint —
+// confirmed live as the correct approach; the earlier invokeurl-based version was a guess at an
+// endpoint/param shape that was never actually verified against this org.
+//
+// uploadResp's shape varies with the operation, confirmed live: a brand-new upload
+// ("OPERATION":"UPLOAD") returns {"data":{"attributes":{...}, "type":"files"}} — a bare object;
+// overwriting an existing same-named file ("OPERATION":"UPDATE") returns
+// {"data":[{"attributes":{...}, "type":"files"}]} — a one-element array. Deluge's Map.get(0) on a
+// bare Map happens to fall back to returning the Map itself (not documented behavior, just
+// observed), so `.get("data").get(0).get("attributes")` works for both shapes without extra
+// branching.
+//
+// The "url" stored here is the WorkDrive API download endpoint
+// (www.zohoapis.com/workdrive/api/v1/download/<resource_id>), built from "resource_id" — NOT
+// "Permalink" (attributes.Permalink), which looked like the right field but is a human-facing web
+// app route (workdrive.zoho.com/file/<id>) requiring an interactive browser session with sign-in
+// cookies. Confirmed live: even a properly OAuth-authenticated ZOHO.CRM.CONNECTION.invoke call
+// against that Permalink URL, from the widget, got redirected to Zoho's sign-in page HTML — no
+// API/OAuth token substitutes for that route's session-cookie requirement. The API download
+// endpoint is what ../shared/fetch_workdrive_text.dg already uses successfully server-side, and
+// what the widget's ZOHO.CRM.CONNECTION.invoke("workdrive_connection", ...) needs client-side too.
+//
+// Returns a JSON-stringified Map — Standalone category functions can only declare return type
+// string. Every digest_generate_<profile>.dg just returns this value straight through (its own
+// declared return type is string too, so no re-wrapping needed there); digest_generate.dg's
+// top-level loop parses the result back with .toMap() immediately at the call site.
+
+string standalone.uploadDigest(String userId, String finalDigestJson, String profileName, String todayStr)
+{
+	fileName = "digest_run_" + todayStr + "_" + userId + ".json"; // user-qualified — a date-only name would collide across users
+
+	uploadResp = zoho.workdrive.uploadFile(finalDigestJson.toFile(fileName), zoho.crm.getOrgVariable("Digest_workdrive_folder_id"), fileName, true, "workdrive_connection");
+	info uploadResp;
+
+	uploadRespAttrs = uploadResp.get("data").get(0).get("attributes");
+	resourceId = uploadRespAttrs.get("resource_id");
+	downloadUrl = "https://www.zohoapis.com/workdrive/api/v1/download/" + resourceId;
+
+	meta = Map();
+	meta.put("url", downloadUrl);
+	meta.put("run_date", todayStr);
+	meta.put("profile", profileName);
+	return meta.toString();
+}

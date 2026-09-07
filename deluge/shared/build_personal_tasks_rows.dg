@@ -1,0 +1,36 @@
+// build_personal_tasks_rows.dg — "Personal Tasks" is common to every profile. Turns the
+// collectOwnTasksCalls bundle into the generic card-list shape app/js/render.js's "card-list"
+// section type expects. No LLM text here (note starts blank, same as any freshly-surfaced item)
+// unless a profile's generator chooses to run its own Claude pass over these rows and merge on
+// top (see generate/digest_build_sales_manager_request.dg + digest_finish_sales_manager.dg, and
+// the _004_sales.dg equivalents).
+//
+// Returns a JSON-stringified List — Standalone category functions can only declare return type
+// string (and only accept string/int/date/float/bool/map as argument types — not List —
+// confirmed by a live "Invalid Argument Type List" error); callers pass `.toString()` of their
+// deal-ids List (Map is a valid argument type, so dealFacts stays as-is) and parse the result
+// back with `.toJSONList()` immediately at the call site. Note: Map/List -> JSON string is
+// `.toString()`, not `.toJSON()` — that method doesn't exist on Deluge's Map/List (confirmed by
+// a live "Not able to find 'toJSON' function" error); `.toMap()`/`.toJSONList()` (String -> Map/
+// List) are the real, separately-named conversions in the other direction.
+
+string standalone.buildPersonalTasksRows(String dealIdsJson, Map dealFacts)
+{
+	dealIds = dealIdsJson.toJSONList();
+	rows = List();
+	for each dealId in dealIds {
+		deal = dealFacts.get(dealId);
+		if (deal == null) { continue; }
+		row = Map();
+		row.putAll(deal); // flattens ds/client/stage/route (see ../shared/trim_deal_fields.dg) onto the row itself — app/js/render.js reads them off the top level, not nested
+		row.put("deal_id", dealId);
+		row.put("happened", List());
+		row.put("proposal", "");
+		row.put("note", "");
+		row.put("reschedulable", false);
+		row.put("deletable", false);
+		row.put("followup", null);
+		rows.add(row);
+	}
+	return rows.toString();
+}

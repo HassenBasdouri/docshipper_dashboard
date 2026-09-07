@@ -1,0 +1,53 @@
+// post_note_with_channel_check.dg — private helper used by digest_dispatch_initial.dg and
+// digest_redispatch_b2b_lost.dg (the two Sales-Manager-only actions that still post their note
+// server-side, bundled with the owner-change/profile-gated write they're already doing — see
+// digest_send_mention_emails.dg for the plain-note case, which now does this same channel-check
+// + write client-side instead, since it isn't gated by anything that needs server enforcement).
+//
+// A8 — channel decision, re-checked fresh on every call (never trust the nightly job's read).
+//
+// TODO: zoho.crm.createRecord("Notes", noteMap) with a Parent_Id map is the confirmed pattern
+// for creating a Note (replaces an earlier, incorrect createNotesModule() guess — that task
+// doesn't appear to exist). "MessagesChat" is a less-common module; confirm zoho.crm.createRecord
+// supports it the same generic way on this org before relying on it in production.
+//
+// Depends on send_compensation_emails.dg.
+//
+// Returns a JSON-stringified Map — Standalone category functions can only declare return type
+// string; callers parse the result back with .toMap() immediately at the call site.
+
+string standalone.postNoteWithChannelCheck(String dealId, String note, String actingUserId)
+{
+	costingThread = zoho.crm.searchRecords("Chats", "(Deals_Chat:equals:" + dealId + ")and(Name:equals:Costing)");
+
+	if (costingThread != null && costingThread.size() > 0) {
+		deal = zoho.crm.getRecordById("Deals", dealId);
+		dealName = deal.get("Deal_Name");
+		msg = Map();
+		msg.put("Name", "Parent Message-" + costingThread.get(0).get("id") + "-" + dealName);
+		msg.put("Title_Text", "DISPATCH — note for the AE");
+		chatRef = Map();
+		chatRef.put("id", costingThread.get(0).get("id"));
+		msg.put("Chats", chatRef);
+		msg.put("Message_Text", note.replaceAll("\n", "<br>"));
+		msg.put("AuthorID", actingUserId);
+		createResp = zoho.crm.createRecord("MessagesChat", msg);
+	} else {
+		note2 = Map();
+		note2.put("Note_Title", "DISPATCH — note for the AE");
+		note2.put("Note_Content", note);
+		parentId = Map();
+		parentModule = Map();
+		parentModule.put("api_name", "Deals");
+		parentId.put("id", dealId);
+		parentId.put("module", parentModule);
+		note2.put("Parent_Id", parentId);
+		createResp = zoho.crm.createRecord("Notes", note2);
+	}
+
+	standalone.sendCompensationEmails(dealId, note, actingUserId);
+
+	result = Map();
+	result.put("posted", true);
+	return result.toString();
+}

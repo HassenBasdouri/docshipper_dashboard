@@ -1,0 +1,108 @@
+// digest_finish_sales_manager.dg — the second half of what used to be
+// digest_generate_sales_manager.dg (see digest_build_sales_manager_request.dg for the first half
+// and why this was split into two functions — batch timeout, not this function's own concern).
+// Takes the raw text Claude already wrote (fetched from the Anthropic Batches API results by
+// generate/digest_finish_batches.dg) instead of making the invokeurl call itself, and does
+// everything after that: parse the structured JSON Claude wrote, merge it onto the deterministic
+// facts from collect/digest_collect_sales_manager.dg, build the section envelope, upload to
+// WorkDrive.
+//
+// Returns a JSON-stringified Map ({url, run_date, profile}, straight from ../shared/upload_digest.dg)
+// — Standalone category functions can only declare return type string. Every ../shared/ helper
+// this function calls (mergeSection, groupDealsByHeat, makeSection, buildPersonalTasksRows) is
+// itself string-returning for the same reason; each call site below parses the result back with
+// .toMap()/.toJSONList() immediately so nothing downstream of that point changes shape.
+
+string standalone.digest_finish_sales_manager(String userId, Map collected, String writtenText)
+{
+	// Claude sometimes wraps its JSON output in a markdown code fence even though the prompt asks
+	// for JSON only — confirmed live ("Invalid JSON Format String"). See ../shared/strip_json_fence.dg.
+	written = standalone.stripJsonFence(writtenText).toMap();
+
+	todayStr = collected.get("run_date");
+
+	// --- Merge step 1's facts with step 2's text (envelope shape, see ../../ANALYSIS.md §4). ---
+	// mergeSection/groupDealsByHeat/buildPersonalTasksRows only accept string/map args (not List —
+	// see those files' headers), so every List value gets `.toString()`'d at the call boundary
+	// (Map/List -> JSON string is `.toString()`, not `.toJSON()` — that method doesn't exist on
+	// Deluge's Map/List, confirmed by a live "Not able to find 'toJSON' function" error);
+	// `written.get(...)` can legitimately be null when a section had no LLM output, so each is
+	// resolved to a local var first and JSON-encoded only when non-null (no ternary — Deluge
+	// doesn't support `?:`, confirmed by a live "? is not supported in Deluge" error — so this is
+	// an explicit if block per value instead of an inline conditional expression).
+	writtenInitial = written.get("initial");
+	writtenInitialJson = null;
+	if (writtenInitial != null) { writtenInitialJson = writtenInitial.toString(); }
+	initialMerged = standalone.mergeSection(collected.get("initial_rows").toString(), writtenInitialJson, "deal_id").toJSONList();
+	initialData = standalone.groupDealsByHeat(initialMerged.toString()).toMap();
+
+	writtenPath1 = written.get("path1");
+	writtenPath1Json = null;
+	if (writtenPath1 != null) { writtenPath1Json = writtenPath1.toString(); }
+	path1Rows = standalone.mergeSection(collected.get("path1_candidates").toString(), writtenPath1Json, "deal_id").toJSONList();
+
+	writtenPath2 = written.get("path2");
+	writtenPath2Json = null;
+	if (writtenPath2 != null) { writtenPath2Json = writtenPath2.toString(); }
+	path2Rows = standalone.mergeSection(collected.get("path2_candidates").toString(), writtenPath2Json, "deal_id").toJSONList();
+
+	writtenSupervision = written.get("supervision_rows");
+	writtenSupervisionJson = null;
+	if (writtenSupervision != null) { writtenSupervisionJson = writtenSupervision.toString(); }
+	supervisionMerged = standalone.mergeSection(collected.get("supervision_candidates").toString(), writtenSupervisionJson, "deal_id").toJSONList();
+
+	writtenB2bRedispatch = written.get("b2b_lost_redispatch");
+	writtenB2bRedispatchJson = null;
+	if (writtenB2bRedispatch != null) { writtenB2bRedispatchJson = writtenB2bRedispatch.toString(); }
+	b2bRedispatchRows = standalone.mergeSection(collected.get("b2b_redispatch_candidates").toString(), writtenB2bRedispatchJson, "deal_id").toJSONList();
+
+	personalTasksRows = standalone.buildPersonalTasksRows(collected.get("personal_tasks_deal_ids").toString(), collected.get("personal_tasks_deal_facts")).toJSONList();
+
+	supervisionByReferent = Map();
+	for each row in supervisionMerged {
+		referent = row.get("referent");
+		group = supervisionByReferent.get(referent);
+		if (group == null) { group = List(); supervisionByReferent.put(referent, group); }
+		group.add(row);
+	}
+	supervisionGroups = List();
+	for each referent in supervisionByReferent.keys() {
+		g = Map();
+		g.put("referent", referent);
+		g.put("rows", supervisionByReferent.get(referent));
+		supervisionGroups.add(g);
+	}
+	supervisionData = Map();
+	supervisionData.put("groups_by_referent", supervisionGroups);
+
+	// makeSection's `data` and `cols` args are also string-only (see that file's header) — a
+	// `dataType` of "map" or "list" tells it how to parse `dataJson` back before embedding it.
+	// b2bPilotedCols is pulled into its own variable rather than passed as an inline {...} literal
+	// with a chained .toString() — that combination fails to save ("Improper Statement Error"),
+	// the same Deluge limitation already confirmed and fixed once before in
+	// ../shared/upload_digest.dg (chaining a method call directly onto an inline literal).
+	b2bPilotedCols = {"ds", "client", "ae", "item"};
+	sections = List();
+	sections.add(standalone.makeSection("initial", "initial-dispatch", "AXIS 1 — INITIAL", "gold", initialData.toString(), "map", null, null).toMap());
+	sections.add(standalone.makeSection("path1", "card-list", "PATH 1 — Didn't go through", "crit", path1Rows.toString(), "list", "path1", null).toMap());
+	sections.add(standalone.makeSection("path2", "card-list", "PATH 2 — No one else on it", "warn", path2Rows.toString(), "list", "path2", null).toMap());
+	sections.add(standalone.makeSection("personal_tasks", "card-list", "Personal Tasks", "info", personalTasksRows.toString(), "list", "personal", null).toMap());
+	sections.add(standalone.makeSection("supervision", "supervision", "PATH 3 — Supervision", "good", supervisionData.toString(), "map", null, null).toMap());
+	sections.add(standalone.makeSection("b2b_lost_redispatch", "b2b-redispatch", "B2B Lost to Redispatch", "gold", b2bRedispatchRows.toString(), "list", null, null).toMap());
+	sections.add(standalone.makeSection("b2b_lost_piloted", "info-table", "B2B Lost Already Handled", "gold", collected.get("b2b_piloted_rows").toString(), "list", null, b2bPilotedCols.toString()).toMap());
+	// TODO: "deals_closed" (ghost-table) and "vigilance" candidates aren't collected yet either —
+	// same pre-existing gap as the original single-user prototype, which never queried for them.
+	// Add a collect step for both once their exact CRM query is confirmed.
+
+	finalDigest = Map();
+	finalDigest.put("run_date", todayStr);
+	finalDigest.put("status", "delivered");
+	finalDigest.put("user_id", userId);
+	finalDigest.put("profile", "Sales Manager");
+	finalDigest.put("badge", Map()); // TODO: badge/pill computation was never implemented in the original single-user prototype either — see ../../ANALYSIS.md §4 for the illustrative shape to reproduce once the v24.1 pill rules are confirmed
+	finalDigest.put("sections", sections);
+	finalDigest.put("method_footer", Map()); // TODO: same gap — anomalies/counts footer was never computed, only illustrated in the sample JSON
+
+	finalDigestJson = finalDigest.toString();
+	return standalone.uploadDigest(userId, finalDigestJson, "Sales Manager", todayStr);
+}

@@ -1,0 +1,10 @@
+// get_record_owner_id.dg — used by apply_supervision_decision.dg's ownership guard (the other
+// simple per-owner ownership checks moved to the client — see app/js/crmApi.js — since they
+// don't need a server-side privilege gate; supervision-batch stays server-side because it's part
+// of the Sales-Manager-only action set).
+
+string standalone.getRecordOwnerId(String module, String recordId)
+{
+	rec = zoho.crm.getRecordById(module, recordId); // corrected: zoho.crm.getRecord() isn't a real Deluge task, getRecordById is
+	return rec.get("Owner").get("id");
+}

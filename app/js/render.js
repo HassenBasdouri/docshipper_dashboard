@@ -52,7 +52,7 @@ function isStaleBanco(data) {
 function staleBanner(data) {
   const div = document.createElement("div");
   div.className = "stale-banner";
-  div.textContent = `⚠ Dernier digest livré le ${data.run_date} — le CRM a pu bouger depuis.`;
+  div.textContent = `⚠ Last digest delivered on ${data.run_date} — the CRM may have changed since.`;
   return div;
 }
 
@@ -81,7 +81,7 @@ function renderBadge(badge) {
   div.className = "badge";
   const big = document.createElement("div");
   big.className = "big";
-  big.innerHTML = `<span id="badge-remaining">${badge.total}</span> items ${badge.very_grave ? '<span class="pill crit">TRÈS GRAVE</span>' : ""}`;
+  big.innerHTML = `<span id="badge-remaining">${badge.total}</span> items ${badge.very_grave ? '<span class="pill crit">VERY SEVERE</span>' : ""}`;
   div.appendChild(big);
   const pills = document.createElement("div");
   pills.className = "pills";
@@ -99,7 +99,7 @@ function renderBadge(badge) {
 
 function renderInitial(initial, crmDomain, opts = { dispatch: true }) {
   const wrap = document.createElement("div");
-  const order = ["gold", "rapide", "moyen", "prudence", "douce"];
+  const order = ["gold", "fast", "medium", "caution", "slow"];
   const groups = (initial.groups || []).slice().sort((a, b) => order.indexOf(a.heat) - order.indexOf(b.heat));
   groups.forEach((g) => {
     const grp = document.createElement("div");
@@ -119,8 +119,8 @@ function renderInitialCard(deal, crmDomain, opts) {
 
   if (deal.gold_estimate) {
     const est = document.createElement("div");
-    est.className = "passe good";
-    est.innerHTML = `<b>Estimation indicative (Gold)</b> — ${escapeHtml(deal.gold_estimate)}`;
+    est.className = "happened good";
+    est.innerHTML = `<b>Indicative estimate (Gold)</b> — ${escapeHtml(deal.gold_estimate)}`;
     card.appendChild(est);
   }
 
@@ -138,7 +138,7 @@ function renderInitialCard(deal, crmDomain, opts) {
 
   const btn = document.createElement("button");
   btn.className = "action-btn";
-  btn.textContent = "Dispatcher ce deal →";
+  btn.textContent = "Dispatch this deal →";
   btn.addEventListener("click", () => {
     const aeId = panel.querySelector(".ae-select").value;
     const note = panel.querySelector(".dispatch-note").value;
@@ -165,7 +165,7 @@ function aeSelect(selectedId) {
   return select;
 }
 
-// --- generic "Est-ce que c'est passé / Ce que je propose" card (Voie 1/2, tasks perso, vigilance) ---
+// --- generic "Did it happen? / What I propose" card (Path 1/2, personal tasks, vigilance) ---
 
 function renderCardList(items, crmDomain, kind, opts = {}) {
   const wrap = document.createElement("div");
@@ -180,15 +180,15 @@ function renderGenericCard(item, crmDomain, kind, opts) {
   card.appendChild(rowTop(item, crmDomain));
 
   if (!opts.noteOnly) {
-    const passe = document.createElement("div");
-    passe.className = "passe";
-    passe.innerHTML = `<b>Est-ce que c'est passé ?</b><br>${(item.passe || []).map(escapeHtml).join("<br>")}`;
-    card.appendChild(passe);
+    const happened = document.createElement("div");
+    happened.className = "happened";
+    happened.innerHTML = `<b>Did it happen?</b><br>${(item.happened || []).map(escapeHtml).join("<br>")}`;
+    card.appendChild(happened);
 
-    const propose = document.createElement("div");
-    propose.className = "recap";
-    propose.innerHTML = `<b>Ce que je propose</b><br>${escapeHtml(item.propose || "")}`;
-    card.appendChild(propose);
+    const proposal = document.createElement("div");
+    proposal.className = "recap";
+    proposal.innerHTML = `<b>What I propose</b><br>${escapeHtml(item.proposal || "")}`;
+    card.appendChild(proposal);
   }
 
   const panel = document.createElement("div");
@@ -199,7 +199,7 @@ function renderGenericCard(item, crmDomain, kind, opts) {
   if (!opts.noteOnly) {
     const postBtn = document.createElement("button");
     postBtn.className = "action-btn";
-    postBtn.textContent = "Poster la note";
+    postBtn.textContent = "Post note";
     postBtn.addEventListener("click", () => {
       const note = panel.querySelector(".dispatch-note").value;
       actions.postFollowupNote(card, { dealId: item.deal_id, note, targetTag: item.target_tag });
@@ -210,7 +210,7 @@ function renderGenericCard(item, crmDomain, kind, opts) {
       const dateInput = panel.querySelector(".fdate");
       const rescheduleBtn = document.createElement("button");
       rescheduleBtn.className = "action-btn secondary";
-      rescheduleBtn.textContent = "Reprogrammer";
+      rescheduleBtn.textContent = "Reschedule";
       rescheduleBtn.addEventListener("click", () => {
         actions.rescheduleItem(card, {
           recordId: item.record_id,
@@ -224,9 +224,9 @@ function renderGenericCard(item, crmDomain, kind, opts) {
     if (item.deletable) {
       const delBtn = document.createElement("button");
       delBtn.className = "action-btn danger";
-      delBtn.textContent = "Supprimer";
+      delBtn.textContent = "Delete";
       delBtn.addEventListener("click", () => {
-        const reason = prompt("Raison de la suppression (obligatoire) :");
+        const reason = prompt("Reason for deletion (required):");
         if (!reason) return;
         actions.deleteFollowup(card, { recordId: item.record_id, module: item.record_module, reason });
       });
@@ -253,16 +253,16 @@ function renderSupervision(sup, crmDomain) {
     const table = document.createElement("table");
     table.className = "sup-table";
     table.innerHTML =
-      "<thead><tr><th>Deal</th><th>Client</th><th>Stage</th><th>Ce qui le couvre déjà</th><th>Où ça en est</th><th>Reprise</th><th>Décision</th></tr></thead>";
+      "<thead><tr><th>Deal</th><th>Client</th><th>Stage</th><th>Already covered by</th><th>Where it stands</th><th>Resume</th><th>Decision</th></tr></thead>";
     const tbody = document.createElement("tbody");
     group.rows.forEach((row) => {
       const tr = document.createElement("tr");
       tr.innerHTML =
-        `<td><a class="dslink" href="${dealUrl(crmDomain, row.deal_id)}" target="_top">${escapeHtml(row.ds)}</a></td>` +
+        `<td><a class="dslink" href="${dealUrl(crmDomain, row.deal_id)}" target="_blank" rel="noopener noreferrer">${escapeHtml(row.ds)}</a></td>` +
         `<td>${escapeHtml(row.client)}</td>` +
         `<td><span class="stage">${escapeHtml(row.stage)}</span></td>` +
         `<td>${escapeHtml(row.covered_by)}</td>` +
-        `<td>${escapeHtml(row.ou_ca_en_est_line)}<br><span class="muted">⟶ ${escapeHtml(row.ou_ca_en_est_waiting || "rien en attente")}</span></td>` +
+        `<td>${escapeHtml(row.status_line)}<br><span class="muted">⟶ ${escapeHtml(row.status_waiting || "nothing pending")}</span></td>` +
         `<td>${escapeHtml(row.resume_date)}</td>`;
       const decisionTd = document.createElement("td");
       const select = document.createElement("select");
@@ -271,9 +271,9 @@ function renderSupervision(sup, crmDomain) {
       select.dataset.module = row.record_module;
       select.dataset.dealId = row.deal_id;
       [
-        ["keep", "— laisser tel quel —"],
-        ["reschedule", `Reprogrammer au ${row.resume_date}`],
-        ["delete", "Supprimer mon call"],
+        ["keep", "— leave as is —"],
+        ["reschedule", `Reschedule to ${row.resume_date}`],
+        ["delete", "Delete my call"],
       ].forEach(([value, label]) => {
         const opt = document.createElement("option");
         opt.value = value;
@@ -289,7 +289,7 @@ function renderSupervision(sup, crmDomain) {
 
     const applyBtn = document.createElement("button");
     applyBtn.className = "action-btn";
-    applyBtn.textContent = "Appliquer mes choix →";
+    applyBtn.textContent = "Apply my choices →";
     applyBtn.addEventListener("click", () => {
       const decisions = Array.from(table.querySelectorAll(".sup-action"))
         .filter((s) => s.value !== "keep")
@@ -307,7 +307,7 @@ function renderSupervision(sup, crmDomain) {
   return wrap;
 }
 
-// --- B2B Lost à redispatcher ---
+// --- B2B Lost to redispatch ---
 
 function renderB2bRedispatch(items, crmDomain) {
   const wrap = document.createElement("div");
@@ -318,18 +318,18 @@ function renderB2bRedispatch(items, crmDomain) {
     card.appendChild(rowTop(item, crmDomain));
 
     const heat = document.createElement("span");
-    heat.className = `pill ${item.heat === "chaud" ? "crit" : item.heat === "tiède" ? "warn" : "off"}`;
+    heat.className = `pill ${item.heat === "hot" ? "crit" : item.heat === "warm" ? "warn" : "off"}`;
     heat.textContent = item.heat;
     card.querySelector(".row-top").appendChild(heat);
 
     const info = document.createElement("div");
-    info.className = "passe";
+    info.className = "happened";
     info.innerHTML =
-      `<b>Pourquoi il est tombé</b> — ${escapeHtml(item.why_lost)}<br>` +
-      `<b>Par où le reprendre</b> — ${escapeHtml(item.angle)}<br>` +
-      `<b>Ancien propriétaire</b> — ${escapeHtml(item.old_owner)}<br>` +
-      `<b>Docs fournis</b> — ${escapeHtml(item.docs || "aucun")}<br>` +
-      `<b>Manquent</b> — ${escapeHtml(item.missing || "—")}`;
+      `<b>Why it fell through</b> — ${escapeHtml(item.why_lost)}<br>` +
+      `<b>How to pick it back up</b> — ${escapeHtml(item.angle)}<br>` +
+      `<b>Previous owner</b> — ${escapeHtml(item.old_owner)}<br>` +
+      `<b>Docs provided</b> — ${escapeHtml(item.docs || "none")}<br>` +
+      `<b>Missing</b> — ${escapeHtml(item.missing || "—")}`;
     card.appendChild(info);
 
     const panel = document.createElement("div");
@@ -338,7 +338,7 @@ function renderB2bRedispatch(items, crmDomain) {
     panel.appendChild(noteEditor(item.note));
     const btn = document.createElement("button");
     btn.className = "action-btn";
-    btn.textContent = "Re-dispatcher →";
+    btn.textContent = "Re-dispatch →";
     btn.addEventListener("click", () => {
       const aeId = panel.querySelector(".ae-select").value;
       const note = panel.querySelector(".dispatch-note").value;
@@ -353,7 +353,7 @@ function renderB2bRedispatch(items, crmDomain) {
 
 // --- info-only tables ---
 
-const COLUMN_LABELS = { ds: "Deal", client: "Client", ae: "AE", item: "Item couvrant" };
+const COLUMN_LABELS = { ds: "Deal", client: "Client", ae: "AE", item: "Covering item" };
 
 function renderInfoTable(items, crmDomain, cols) {
   const table = document.createElement("table");
@@ -363,7 +363,7 @@ function renderInfoTable(items, crmDomain, cols) {
   items.forEach((item) => {
     const tr = document.createElement("tr");
     tr.innerHTML = cols
-      .map((c) => (c === "ds" ? `<a class="dslink" href="${dealUrl(crmDomain, item.deal_id)}" target="_top">${escapeHtml(item[c])}</a>` : `<td>${escapeHtml(item[c] ?? "")}</td>`))
+      .map((c) => (c === "ds" ? `<a class="dslink" href="${dealUrl(crmDomain, item.deal_id)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item[c])}</a>` : `<td>${escapeHtml(item[c] ?? "")}</td>`))
       .join("");
     tbody.appendChild(tr);
   });
@@ -374,18 +374,18 @@ function renderInfoTable(items, crmDomain, cols) {
 function renderGhostTable(items, crmDomain) {
   const table = document.createElement("table");
   table.className = "info-table";
-  table.innerHTML = "<thead><tr><th>Deal</th><th>Client</th><th>Stage</th><th>Fermé par</th><th>Le</th><th>Décision</th></tr></thead>";
+  table.innerHTML = "<thead><tr><th>Deal</th><th>Client</th><th>Stage</th><th>Closed by</th><th>On</th><th>Decision</th></tr></thead>";
   const tbody = document.createElement("tbody");
   items.forEach((item) => {
     const tr = document.createElement("tr");
     tr.innerHTML =
-      `<td><a class="dslink" href="${dealUrl(crmDomain, item.deal_id)}" target="_top">${escapeHtml(item.ds)}</a></td>` +
+      `<td><a class="dslink" href="${dealUrl(crmDomain, item.deal_id)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.ds)}</a></td>` +
       `<td>${escapeHtml(item.client)}</td><td><span class="stage">${escapeHtml(item.stage)}</span></td>` +
       `<td>${escapeHtml(item.closed_by)}</td><td>${escapeHtml(item.closed_date)}</td>`;
     const td = document.createElement("td");
     const select = document.createElement("select");
     select.className = "ghost-action";
-    select.innerHTML = `<option value="keep">— laisser tel quel —</option><option value="cancel">Annuler mon call</option>`;
+    select.innerHTML = `<option value="keep">— leave as is —</option><option value="cancel">Cancel my call</option>`;
     select.dataset.recordId = item.record_id;
     td.appendChild(select);
     tr.appendChild(td);
@@ -395,7 +395,7 @@ function renderGhostTable(items, crmDomain) {
 
   const applyBtn = document.createElement("button");
   applyBtn.className = "action-btn";
-  applyBtn.textContent = "Appliquer mes choix";
+  applyBtn.textContent = "Apply my choices";
   applyBtn.addEventListener("click", () => {
     Array.from(table.querySelectorAll(".ghost-action"))
       .filter((s) => s.value === "cancel")
@@ -411,7 +411,7 @@ function renderGhostTable(items, crmDomain) {
 function renderMethodFooter(footer) {
   const section = document.createElement("section");
   section.className = "method-footer";
-  section.innerHTML = `<h2>Pied de méthode</h2><pre>${escapeHtml(JSON.stringify(footer, null, 2))}</pre>`;
+  section.innerHTML = `<h2>Method footer</h2><pre>${escapeHtml(JSON.stringify(footer, null, 2))}</pre>`;
   return section;
 }
 
@@ -421,7 +421,7 @@ function rowTop(item, crmDomain) {
   const div = document.createElement("div");
   div.className = "row-top";
   div.innerHTML =
-    `<a class="dslink" href="${dealUrl(crmDomain, item.deal_id)}" target="_top">${escapeHtml(item.ds)}</a> ` +
+    `<a class="dslink" href="${dealUrl(crmDomain, item.deal_id)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.ds)}</a> ` +
     `<span class="cust">${escapeHtml(item.client)}</span> ` +
     `<span class="stage">${escapeHtml(item.stage || "")}</span> ` +
     `${escapeHtml(item.route || "")}`;
@@ -478,7 +478,7 @@ function followupSelect(followup) {
   wrap.className = "followup-row";
   const typeSelect = document.createElement("select");
   typeSelect.className = "followup-type";
-  typeSelect.innerHTML = `<option value="">Aucun suivi</option><option value="task">Task</option><option value="call">Call</option>`;
+  typeSelect.innerHTML = `<option value="">No follow-up</option><option value="task">Task</option><option value="call">Call</option>`;
   typeSelect.value = (followup && followup.type) || "";
   const dateInput = document.createElement("input");
   dateInput.type = "date";

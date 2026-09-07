@@ -1,0 +1,54 @@
+// delete_workdrive_file.dg — best-effort delete-by-id for a WorkDrive file, used by the pipeline's
+// self-cleanup: every call site passes in a resource_id the pipeline itself just finished using
+// (a superseded digest_run file, a consumed batch-state file, a consumed batch-results relay
+// file), never an id sourced from anywhere else — so this never risks touching the permanent
+// house-rules files (Digest_house_rules_<profile>_file_id), whose ids never flow through this
+// function.
+//
+// No native zoho.workdrive.deleteFile task exists (same absence ../shared/fetch_workdrive_text.dg's
+// header already confirmed for a native downloadFile task) — this goes through WorkDrive's REST API
+// via invokeurl instead, same connection ("workdrive_connection") as every other WorkDrive call in
+// this repo. A plain DELETE to /api/v1/files/<id> was tried first and rejected live with 415
+// (Unsupported Media Type) — WorkDrive doesn't delete this way. The confirmed approach, per
+// WorkDrive's own API docs: PATCH /api/v1/files/<id> with a JSON:API body setting
+// attributes.status to "61" (trash) moves the file to WorkDrive's trash rather than purging it
+// immediately — an acceptable, arguably preferable, first behavior for a cleanup job (reversible
+// if this ever deletes something it shouldn't have).
+//
+// Never throws — a failed cleanup should not break the nightly digest run itself (same
+// last-good-stays philosophy as the per-user catch blocks in generate/digest_generate.dg /
+// generate/digest_finish_batches.dg). Logs and swallows any error instead.
+
+String standalone.deleteWorkdriveFile(String fileId)
+{
+	if (fileId == null || fileId == "") {
+		return "skipped — empty fileId";
+	}
+	try {
+		attributes = Map();
+		attributes.put("status", "61");
+		data = Map();
+		data.put("attributes", attributes);
+		data.put("type", "files");
+		body = Map();
+		body.put("data", data);
+
+		headers = Map();
+		headers.put("Accept", "application/vnd.api+json");
+
+		response = invokeurl
+		[
+			url: "https://www.zohoapis.com/workdrive/api/v1/files/" + fileId
+			type: PATCH
+			parameters: body.toString()
+			headers: headers
+			connection: "workdrive_connection"
+		];
+		info response;
+		r= "deleted";
+	} catch (e) {
+		info "deleteWorkdriveFile: failed to delete " + fileId + ": " + e;
+		r= "failed: " + e;
+	}
+	return r;
+}

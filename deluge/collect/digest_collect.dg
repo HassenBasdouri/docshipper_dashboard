@@ -1,0 +1,21 @@
+// digest_collect.dg — nightly step 1 router (scheduled ~07:00, runs before generate/digest_generate.dg)
+//
+// Routes to a profile-specific collector so each profile's CRM-reading rules live in their own
+// file instead of one growing conditional. All CRM reading happens in those files, in as few,
+// wide COQL calls as possible — this is the credit-cost-sensitive half of the job (see
+// ../../ANALYSIS.md §2/§3). Adding a real profile later means writing one new
+// digest_collect_<profile>.dg + one branch here — see digest_collect_stub.dg for the minimal
+// shape a new collector must return. Depends on ../shared/get_user_profile.dg.
+//
+// Returns a JSON-stringified Map — Standalone category functions can only declare return type
+// string. Each branch already returns a JSON string (same convention), so this just passes it
+// straight through; callers parse the result back with .toMap() immediately at the call site.
+
+string standalone.digest_collect(String userId)
+{
+	profileName = standalone.getUserProfile(userId); // live lookup, never cached
+
+	if (profileName == "Sales Manager") { return standalone.digest_collect_sales_manager(userId); }
+	if (profileName == "004-SALES") { return standalone.digest_collect_004_sales(userId); }
+	return standalone.digest_collect_stub(userId, profileName);
+}

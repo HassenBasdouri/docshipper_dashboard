@@ -1,0 +1,45 @@
+// digest_dispatch_initial.dg — widget-invoked Standalone function (see ../../app/js/config.js
+// ACTION_FUNCTIONS, ../../app/js/actions.js). Sales-Manager-only: changes deal ownership, so it
+// stays server-side (unlike the plain per-owner actions — reschedule/delete/cancel — which moved
+// to direct client-side ZOHO.CRM.API calls in ../../app/js/crmApi.js, since they don't need this
+// profile gate). No LLM call here — the note text was already written by generate/ the night
+// before and arrives as a function argument.
+//
+// Depends on ../shared/resolve_actor.dg, ../shared/get_user_profile.dg,
+// post_note_with_channel_check.dg, create_followup.dg.
+//
+// Returns a JSON-stringified Map — Standalone category functions can only declare return type
+// string (confirmed via a live deploy error — "Invalid return Type Map. Category standalone
+// returns string"). postNoteWithChannelCheck's result is parsed back with .toMap() immediately
+// so it embeds as a proper nested object, not a double-encoded string.
+
+string standalone.digest_dispatch_initial(String dealId, String aeId, String note, Map followup, String viewAsUserId)
+{
+	actingUserId = standalone.resolveActor(viewAsUserId);
+	if (standalone.getUserProfile(actingUserId) != "Sales Manager") {
+		result = Map();
+		result.put("ok", false);
+		result.put("error", "Action restricted to the Sales Manager profile.");
+		return result.toString();
+	}
+
+	// B2 — single-button Initial dispatch: owner change + channel-aware note + A7 email.
+	dealUpdate = Map();
+	dealUpdate.put("id", dealId);
+	ownerMap = Map();
+	ownerMap.put("id", aeId);
+	dealUpdate.put("Owner", ownerMap);
+	updateResp = zoho.crm.updateRecord("Deals", dealId, dealUpdate, {"trigger": {"workflow"}});
+
+	postResult = standalone.postNoteWithChannelCheck(dealId, note, actingUserId).toMap();
+
+	if (followup != null && followup.get("type") != null) {
+		standalone.createFollowup(dealId, actingUserId, followup.get("type"), followup.get("date"));
+	}
+
+	result = Map();
+	result.put("ok", true);
+	result.put("owner_update", updateResp);
+	result.put("note", postResult);
+	return result.toString();
+}

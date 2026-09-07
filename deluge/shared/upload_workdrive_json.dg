@@ -1,0 +1,25 @@
+// upload_workdrive_json.dg — generic WorkDrive JSON-blob uploader. Used to persist the pending
+// Anthropic Batches state (per-user collected facts + profile, keyed by userId) between
+// generate/digest_generate.dg's submit phase and generate/digest_finish_batches.dg's later poll —
+// Deluge functions don't share memory across separate scheduled invocations, so anything that
+// needs to survive the gap between submit and finish has to be written somewhere durable. Small
+// enough state could arguably fit an org variable directly, but this reuses the same WorkDrive
+// approach already proven for ../shared/upload_digest.dg / fetch_workdrive_text.dg rather than
+// introducing a second persistence mechanism.
+//
+// Same native zoho.workdrive.uploadFile task as ../shared/upload_digest.dg (confirmed live as the
+// correct approach over a generic invokeurl POST).
+//
+// uploadResp's real shape, confirmed live (via ../generate/digest_finish_batches.dg's WorkDrive
+// relay experiment, which hit this same upload task): {"data":[{"attributes":{"resource_id":...,
+// "Permalink":..., "FileName":..., ...}, "type":"files"}]} — a `data` array, not a flat object;
+// the file id is "resource_id", nested under data[0].attributes, not a top-level "id".
+//
+// Returns the WorkDrive file id (resource_id) as a plain string.
+
+string standalone.uploadWorkdriveJson(String jsonContent, String fileName)
+{
+	uploadResp = zoho.workdrive.uploadFile(jsonContent.toFile(fileName), zoho.crm.getOrgVariable("Digest_workdrive_folder_id"), fileName, true, "workdrive_connection");
+	info uploadResp;
+	return uploadResp.get("data").get(0).get("attributes").get("resource_id");
+}

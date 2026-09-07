@@ -4,27 +4,28 @@
 // Org variable (Zoho CRM Settings > Org Variables) holding a JSON map of every user's latest
 // digest — {"<userId>": {"url","run_date","profile"}, ...}. Replaces the old single-user
 // `Digest_url` string variable now that the widget serves more than one person; the nightly
-// Deluge job (deluge/digest_generate.dg) rewrites this variable once per run after looping
+// Deluge job (deluge/generate/digest_generate.dg) rewrites this variable once per run after looping
 // over every active user.
 export const DIGEST_REGISTRY_VARIABLE = "Digest_registry";
 
 // Cosmetic header labels per CRM Profile. Falls back to the raw profile name for any profile
 // not listed here (including future stub profiles) — no code change needed to onboard one.
 export const PROFILE_LABELS = {
-  "Sales Manager": "Pilote — Sales Manager",
-  "004-SALES": "Mon pipeline",
+  "Sales Manager": "Pilot — Sales Manager",
+  "004-SALES": "My pipeline",
 };
 
-// Deluge custom functions the widget calls for native actions (no copy-paste, no LLM
-// round-trip at click time — see deluge/digest_actions.dg for the implementations).
+// Deluge Standalone functions the widget calls for the Sales-Manager-only actions (owner
+// changes, bulk decisions — see deluge/actions/ for the implementations and
+// ../../CLAUDE.md for why these three stay server-side while the rest of actions.js writes
+// directly via ZOHO.CRM.API in crmApi.js). sendMentionEmails is the exception that isn't
+// profile-gated — it's the compensation-email-only step every plain note post still needs,
+// since sending mail has no client-SDK equivalent.
 export const ACTION_FUNCTIONS = {
   dispatchInitial: "digest_dispatch_initial",
-  postFollowupNote: "digest_post_followup_note",
-  rescheduleItem: "digest_reschedule_item",
-  deleteFollowup: "digest_delete_followup",
-  applySupervisionBatch: "digest_apply_supervision_batch",
   redispatchB2bLost: "digest_redispatch_b2b_lost",
-  cancelGhostCall: "digest_cancel_ghost_call",
+  applySupervisionBatch: "digest_apply_supervision_batch",
+  sendMentionEmails: "digest_send_mention_emails",
 };
 
 // A2 — exact team directory with ids/emails, as verified via getUsers on 26/08.

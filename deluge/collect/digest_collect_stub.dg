@@ -7,8 +7,11 @@
 // rules that haven't been specified. Adding a real profile later means writing a new
 // digest_collect_<profile>.dg like digest_collect_004_sales.dg, plus one branch in
 // digest_collect.dg's router — this file is the floor every new profile starts from.
+//
+// Returns a JSON-stringified Map — Standalone category functions can only declare return type
+// string; callers parse the result back with .toMap() immediately at the call site.
 
-Map digest_collect_stub(String userId, String profileName)
+string standalone.digest_collect_stub(String userId, String profileName)
 {
 	today = zoho.currentdate;
 	todayStr = today.toString("yyyy-MM-dd");
@@ -17,9 +20,9 @@ Map digest_collect_stub(String userId, String profileName)
 	result.put("run_date", todayStr);
 	result.put("profile", profileName);
 
-	own = collectOwnTasksCalls(userId);
-	result.put("tasks_perso_deal_ids", own.get("deal_ids"));
-	result.put("tasks_perso_deal_facts", own.get("deal_facts"));
+	own = standalone.collectOwnTasksCalls(userId).toMap();
+	result.put("personal_tasks_deal_ids", own.get("deal_ids"));
+	result.put("personal_tasks_deal_facts", own.get("deal_facts"));
 
-	return result;
+	return result.toString();
 }

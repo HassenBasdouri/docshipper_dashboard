@@ -1,0 +1,80 @@
+// trim_deal_fields.dg — reduces a full CRM Deal record down to just the fields this pipeline
+// actually uses, before it gets embedded — sometimes several times over, once per section a deal
+// appears in (personal_tasks, path1/path2/supervision, initial, b2b_lost) — into either the Claude
+// prompt or the final digest envelope.
+//
+// searchRecords/getRecords return every field on the Deals module, not a selected subset (there's
+// no COQL "select ..." equivalent available yet — see ../shared/collect_own_tasks_calls.dg's
+// header). Confirmed live: an untrimmed prompt for one Sales Manager hit 283,138 tokens against
+// Anthropic's 200,000-token context limit ("prompt is too long"). The widget itself
+// (app/js/render.js) never reads the nested full deal object's raw CRM fields — only the flat
+// synthetic fields this pipeline adds on top (deal_id, note, gold_estimate, suggested_ae_id,
+// followup, ...) — so trimming here is safe.
+//
+// Field list matches the COQL select ../shared/collect_own_tasks_calls.dg originally intended
+// before that call was swapped to searchRecords.
+//
+// Also puts the flat display fields app/js/render.js actually reads directly off each row
+// (item.deal_id / item.ds / item.client / item.stage / item.route — it has no knowledge of raw
+// CRM field names, and every collect/*.dg row-builder is expected to `row.putAll(trimmedDeal)`
+// rather than nesting it under its own "deal" key, which is what left Deal/Client blank on the
+// widget and silently broke ../shared/merge_section.dg's join-by-deal_id for the two B2B lists
+// (they only had "id", never "deal_id"). TODO: Deal_Name/Account_Name are a best guess for
+// "DS-number" and "client name" pending confirmation against the live org (see this file's header
+// above) — swap these two `.get(...)` calls if they turn out wrong.
+//
+// Returns a JSON-stringified Map — Standalone category functions can only declare return type
+// string; callers parse the result back with .toMap() immediately at the call site.
+
+string standalone.trimDealFields(Map deal)
+{
+	trimmed = Map();
+	trimmed.put("id", deal.get("id"));
+	trimmed.put("Deal_Name", deal.get("Deal_Name"));
+	trimmed.put("Stage", deal.get("Stage"));
+	trimmed.put("Owner", deal.get("Owner"));
+	trimmed.put("Country_of_Departure", deal.get("Country_of_Departure"));
+	trimmed.put("Country_of_Arrival", deal.get("Country_of_Arrival"));
+	trimmed.put("Total_Weight_KG", deal.get("Total_Weight_KG"));
+	trimmed.put("Volume_m3", deal.get("Volume_m3"));
+	trimmed.put("Value_of_goods", deal.get("Value_of_goods"));
+	trimmed.put("Incoterm_of_departure", deal.get("Incoterm_of_departure"));
+	trimmed.put("Incoterms_of_arrival", deal.get("Incoterms_of_arrival"));
+	trimmed.put("Shipping_Instructions_Date", deal.get("Shipping_Instructions_Date"));
+	trimmed.put("Last_Activity_Time", deal.get("Last_Activity_Time"));
+
+	trimmed.put("deal_id", deal.get("id"));
+	trimmed.put("ds", deal.get("Deal_Name"));
+
+	// "client" (app/js/render.js's Client column/rowTop) — a Deal can carry an Account, a Contact,
+	// both, or neither; showing only Account_Name left it blank for any deal without a linked
+	// company. Combine both when present rather than picking one and silently dropping the other.
+	accountName = null;
+	if (deal.get("Account_Name") != null) { accountName = deal.get("Account_Name").get("name"); }
+	contactName = null;
+	if (deal.get("Contact_Name") != null) { contactName = deal.get("Contact_Name").get("name"); }
+	clientName = null;
+	if (accountName != null && contactName != null) {
+		clientName = accountName + " / " + contactName;
+	} else if (accountName != null) {
+		clientName = accountName;
+	} else if (contactName != null) {
+		clientName = contactName;
+	}
+	trimmed.put("client", clientName);
+
+	// "ae" (app/js/render.js's info-table AE column) — the deal owner. Owner itself is a
+	// {id, name} lookup Map, not the flat string that column reads directly off the row.
+	aeName = null;
+	if (deal.get("Owner") != null) { aeName = deal.get("Owner").get("name"); }
+	trimmed.put("ae", aeName);
+
+	trimmed.put("stage", deal.get("Stage"));
+	route = "";
+	dep = deal.get("Country_of_Departure");
+	arr = deal.get("Country_of_Arrival");
+	if (dep != null && arr != null) { route = dep + " → " + arr; }
+	trimmed.put("route", route);
+
+	return trimmed.toString();
+}

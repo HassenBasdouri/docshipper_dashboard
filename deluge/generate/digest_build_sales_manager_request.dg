@@ -1,0 +1,112 @@
+// digest_build_sales_manager_request.dg — builds the Anthropic Messages API request body for one
+// Sales Manager user's nightly Claude call, WITHOUT making the call. Split out of what used to be
+// digest_generate_sales_manager.dg (see digest_finish_sales_manager.dg for the other half) because
+// a single synchronous invokeurl call generating a full Sales Manager's notes was taking ~52s
+// against Deluge's fixed ~40s invokeurl timeout — confirmed live ("The task has been terminated
+// since the API call is taking too long to respond"), even after switching to the fastest current
+// model (Haiku 4.5) and trimming the prompt. Deluge's invokeurl timeout isn't configurable, so
+// this moves to Anthropic's Batches API instead (generate/digest_generate.dg submits a batch
+// containing every real-profile user's request in one go; generate/digest_finish_batches.dg polls
+// for completion later and calls digest_finish_sales_manager.dg per result) — a batch submission
+// call is fast regardless of how long generation itself takes, since it doesn't block on it.
+//
+// Same house-rules-from-WorkDrive, cache_control, and prompt-construction logic as the original
+// single-call version; only the invokeurl call and everything after it (response parsing, merge,
+// section-building, upload) moved to digest_finish_sales_manager.dg.
+//
+// Also declares Zoho's hosted CRM MCP server (mcp_servers/tools below) so Claude can call it live,
+// mid-generation, for C2bis's Notes/Attachments/Emails lookups — the batch worker runs the same
+// server-side MCP loop the synchronous Messages API does, so this needs no invokeurl round-trip
+// and adds no risk to the 40s timeout this whole submit/finish split exists to avoid.
+//
+// Returns a JSON-stringified Map (the Anthropic request body — model/max_tokens/system/messages)
+// — Standalone category functions can only declare return type string; the caller
+// (generate/digest_generate.dg) parses the result back with .toMap() immediately, since it needs
+// to nest this under a "params" key alongside a "custom_id" for the batch request.
+
+string standalone.digest_build_sales_manager_request(String userId, Map collected)
+{
+	MODEL_ID = "claude-haiku-4-5-20251001"; // fastest/cheapest current Claude model — see ../../CLAUDE.md and this file's header for why. Does not accept output_config/effort (confirmed live: "This model does not support the effort parameter").
+
+	// Digest_house_rules_sales_manager_file_id holds a WorkDrive file id, not the text itself —
+	// the raw doc is too big for a CRM org variable (see ../shared/fetch_workdrive_text.dg).
+	houseRulesFileId = zoho.crm.getOrgVariable("Digest_house_rules_sales_manager_file_id");
+	stableSystemPrompt = standalone.fetchWorkdriveText(houseRulesFileId);
+
+	// Fail loud, not loud-later: Anthropic rejects cache_control on an empty text block
+	// ("system.0: cache_control cannot be set for empty text blocks"), and an empty house-rules
+	// prompt is never something to send anyway — confirmed live this happens silently when
+	// Digest_house_rules_sales_manager_file_id is unset/wrong or the WorkDrive file it points to
+	// is empty. Throwing here is caught by digest_generate.dg's existing per-user try/catch, which
+	// skips this user for the batch and leaves their last-good Digest_registry entry untouched —
+	// far better than burning a whole day's batch cycle on a request guaranteed to error.
+	if (houseRulesFileId == null || houseRulesFileId == "" || stableSystemPrompt == null || stableSystemPrompt == "") {
+		throw "digest_build_sales_manager_request: house rules text came back empty (file id '" + houseRulesFileId + "') — check the Digest_house_rules_sales_manager_file_id org variable and that the WorkDrive file it points to actually has content.";
+	}
+
+	systemBlocks = List();
+	stableBlock = Map();
+	stableBlock.put("type", "text");
+	stableBlock.put("text", stableSystemPrompt);
+	cacheControl = Map();
+	cacheControl.put("type", "ephemeral");
+	stableBlock.put("cache_control", cacheControl);
+	systemBlocks.add(stableBlock);
+
+	userContent = "Here are today's facts, already sorted (D1-D8) and verified via a fresh CRM query. "
+		+ "You have CRM tools available (via Zoho's own MCP server) that can look up a deal's related "
+		+ "Notes, Attachments, and Emails — per C2bis, use them for Initial deals where the facts below "
+		+ "don't already answer C2bis's questions; don't call them for deals where they do. "
+		+ "For each item, write only the requested text (C2ter dispatch note, "
+		+ "\"where it stands\" D4bis, B2B Lost reason). Once you are done looking things up, your FINAL "
+		+ "message must be ONLY a JSON object, with no other text before or after it, "
+		+ "matching exactly this schema: "
+		+ "{\"initial\":[{\"deal_id\":\"\",\"note\":\"\",\"gold_estimate\":\"\"}],"
+		+ "\"path1\":[{\"deal_id\":\"\",\"happened\":[],\"proposal\":\"\",\"note\":\"\"}],"
+		+ "\"path2\":[...same shape...],"
+		+ "\"supervision_rows\":[{\"deal_id\":\"\",\"status_line\":\"\",\"status_waiting\":\"\"}],"
+		+ "\"b2b_lost_redispatch\":[{\"deal_id\":\"\",\"heat\":\"\",\"why_lost\":\"\",\"angle\":\"\",\"note\":\"\"}]}"
+		+ " (\"heat\" must be one of \"hot\", \"warm\", \"cold\"). Write all text in English."
+		+ "\n\nToday's facts (JSON):\n" + collected.toString();
+
+	messages = List();
+	userMsg = Map();
+	userMsg.put("role", "user");
+	userMsg.put("content", userContent);
+	messages.add(userMsg);
+
+	// Zoho's own hosted CRM MCP server (mcp.zoho.com, "Data Operations" server, "Authorization via
+	// Connections" mode — see ../README.md's deployment checklist) gives Claude live, read-only
+	// access to a deal's related Notes/Attachments/Emails during generation (C2bis) — no server of
+	// ours to host, no separate Zoho OAuth app; the credential is embedded in the server URL itself.
+	// Digest_mcp_bearer_token is optional: only set it if mcp.zoho.com's console hands you a
+	// separate token alongside the URL — leave the org variable empty if the URL alone suffices.
+	mcpServerUrl = zoho.crm.getOrgVariable("Digest_mcp_server_url");
+	mcpBearerToken = zoho.crm.getOrgVariable("Digest_mcp_bearer_token");
+
+	mcpServer = Map();
+	mcpServer.put("type", "url");
+	mcpServer.put("url", mcpServerUrl);
+	mcpServer.put("name", "zoho-crm");
+	if (mcpBearerToken != null && mcpBearerToken != "") {
+		mcpServer.put("authorization_token", mcpBearerToken);
+	}
+	mcpServers = List();
+	mcpServers.add(mcpServer);
+
+	mcpToolset = Map();
+	mcpToolset.put("type", "mcp_toolset");
+	mcpToolset.put("mcp_server_name", "zoho-crm");
+	tools = List();
+	tools.add(mcpToolset);
+
+	requestBody = Map();
+	requestBody.put("model", MODEL_ID);
+	requestBody.put("max_tokens", 16000);
+	requestBody.put("system", systemBlocks);
+	requestBody.put("messages", messages);
+	requestBody.put("mcp_servers", mcpServers);
+	requestBody.put("tools", tools);
+
+	return requestBody.toString();
+}

@@ -1,0 +1,35 @@
+// create_followup.dg — private helper used by digest_dispatch_initial.dg.
+//
+// Returns an empty string — Standalone category functions can only declare return type string,
+// even ones like this that are pure side effect (no data to hand back to the caller).
+
+string standalone.createFollowup(String dealId, String ownerId, String type, String date)
+{
+	dealRef = Map();
+	dealRef.put("id", dealId);
+	if (type == "call") {
+		call = Map();
+		call.put("Subject", "Call scheduled");
+		call.put("Call_Type", "Outbound");
+		call.put("Call_Start_Time", date + "T00:00:00+07:00");
+		call.put("Call_Duration", "00:00");
+		call.put("Outgoing_Call_Status", "Scheduled");
+		call.put("What_Id", dealRef);
+		call.put("$se_module", "Deals");
+		owner = Map();
+		owner.put("id", ownerId);
+		call.put("Owner", owner);
+		zoho.crm.createRecord("Calls", call);
+	} else if (type == "task") {
+		task = Map();
+		task.put("Subject", "Suivi digest");
+		task.put("Due_Date", date);
+		task.put("What_Id", dealRef);
+		task.put("$se_module", "Deals");
+		owner = Map();
+		owner.put("id", ownerId);
+		task.put("Owner", owner);
+		zoho.crm.createRecord("Tasks", task);
+	}
+	return "";
+}

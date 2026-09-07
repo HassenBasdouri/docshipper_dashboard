@@ -1,0 +1,28 @@
+// digest_redispatch_b2b_lost.dg — widget-invoked Standalone function. Sales-Manager-only.
+//
+// D5 — deal owner NEVER changes on a B2B Lost redispatch, no follow-up is created for the
+// acting user. This function deliberately has no owner-update step, unlike dispatch_initial.
+//
+// Depends on ../shared/resolve_actor.dg, ../shared/get_user_profile.dg,
+// post_note_with_channel_check.dg.
+//
+// Returns a JSON-stringified Map — Standalone category functions can only declare return type
+// string. postNoteWithChannelCheck's result is parsed back with .toMap() immediately so it
+// embeds as a proper nested object, not a double-encoded string.
+
+string standalone.digest_redispatch_b2b_lost(String dealId, String aeId, String note, String viewAsUserId)
+{
+	actingUserId = standalone.resolveActor(viewAsUserId);
+	if (standalone.getUserProfile(actingUserId) != "Sales Manager") {
+		result = Map();
+		result.put("ok", false);
+		result.put("error", "Action restricted to the Sales Manager profile.");
+		return result.toString();
+	}
+
+	postResult = standalone.postNoteWithChannelCheck(dealId, note, actingUserId).toMap();
+	result = Map();
+	result.put("ok", true);
+	result.put("note", postResult);
+	return result.toString();
+}

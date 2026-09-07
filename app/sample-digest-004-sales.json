@@ -7,17 +7,17 @@
     "total": 4,
     "very_grave": false,
     "pills": [
-      { "label": "tasks perso", "count": 2 },
+      { "label": "personal tasks", "count": 2 },
       { "label": "initial", "count": 1 },
-      { "label": "b2b lost à travailler", "count": 1 }
+      { "label": "b2b lost to work", "count": 1 }
     ]
   },
   "sections": [
     {
-      "key": "tasks_perso",
+      "key": "personal_tasks",
       "type": "card-list",
-      "kind": "perso",
-      "title": "Tasks personnelles",
+      "kind": "personal",
+      "title": "Personal Tasks",
       "accent": "info",
       "data": [
         {
@@ -26,8 +26,8 @@
           "client": "Nordic Freight SARL",
           "stage": "Quote sent",
           "route": "",
-          "passe": ["Client relancé le 26/08, en attente de retour."],
-          "propose": "Relancer par téléphone si pas de retour avant le 31/08.",
+          "happened": ["Client followed up with on 08/26, awaiting reply."],
+          "proposal": "Follow up by phone if no reply before 08/31.",
           "note": "",
           "target_tag": "",
           "record_id": "20001",
@@ -42,8 +42,8 @@
           "client": "Atlas Import",
           "stage": "Negotiation",
           "route": "",
-          "passe": ["Appel prévu ce jour à 15h."],
-          "propose": "Confirmer le créneau avec le client avant l'appel.",
+          "happened": ["Call scheduled for today at 3pm."],
+          "proposal": "Confirm the time slot with the client before the call.",
           "note": "",
           "target_tag": "",
           "record_id": "20002",
@@ -57,7 +57,7 @@
     {
       "key": "initial_own",
       "type": "initial-info",
-      "title": "Mes deals Initial",
+      "title": "My Initial Deals",
       "accent": "gold",
       "data": {
         "groups": [
@@ -68,8 +68,8 @@
                 "deal_id": "103",
                 "ds": "DS-60142",
                 "client": "Horizon Textiles",
-                "route": "Ningbo → Anvers · 20' DV · 800kg · FOB · Web · 28/08",
-                "gold_estimate": "Composite 3180 USD/20' (+4% s/s) — indicative, hors droits, à confirmer."
+                "route": "Ningbo → Antwerp · 20' DV · 800kg · FOB · Web · 28/08",
+                "gold_estimate": "Composite 3180 USD/20' (+4% s/s) — indicative, excluding duties, to be confirmed."
               }
             ]
           }
@@ -80,7 +80,7 @@
       "key": "b2b_lost_own",
       "type": "card-list",
       "kind": "b2b_lost_own",
-      "title": "Mes B2B Lost à reprendre",
+      "title": "My B2B Lost to Recover",
       "accent": "gold",
       "data": [
         {
@@ -89,8 +89,8 @@
           "client": "Meridian Auto Parts",
           "stage": "B2B Lost",
           "route": "Shenzhen → Marseille",
-          "passe": ["Dernier échange le 15/07 — client attendait une contre-offre."],
-          "propose": "Recontacter avec un tarif révisé avant le 05/09.",
+          "happened": ["Last exchange on 07/15 — client was waiting for a counter-offer."],
+          "proposal": "Recontact with a revised rate before 09/05.",
           "note": "",
           "target_tag": "",
           "record_id": null,
@@ -103,8 +103,8 @@
     }
   ],
   "method_footer": {
-    "counts": { "tasks_perso": 2, "initial_own": 1, "b2b_lost_own": 1 },
+    "counts": { "personal_tasks": 2, "initial_own": 1, "b2b_lost_own": 1 },
     "anomalies": [],
-    "note": "Échantillon local — pas un vrai run."
+    "note": "Local sample — not a real run."
   }
 }

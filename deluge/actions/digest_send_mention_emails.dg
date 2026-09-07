@@ -1,0 +1,26 @@
+// digest_send_mention_emails.dg — widget-invoked Standalone function. Replaces the old
+// digest_post_followup_note action: the actual note WRITE now happens directly client-side
+// (see app/js/crmApi.js + app/js/actions.js — a channel check via ZOHO.CRM.API.searchRecord,
+// then ZOHO.CRM.API.insertRecord("MessagesChat",...) or ZOHO.CRM.API.addNotes(...), both
+// executing under the real logged-in user's own Zoho session — no server round-trip needed for
+// the CRM write itself, and no ownership guard needed since a user can already do this to their
+// own record via the normal CRM UI). This function's ONLY remaining job is the A7 compensation
+// email, which has no client-SDK equivalent (Deluge's sendmail is server-only).
+//
+// No ownership guard, no profile guard: sending a "you were mentioned" email isn't a CRM write
+// and isn't restricted to a specific profile — any user posting a note that @mentions someone
+// can trigger it.
+//
+// Depends on ../shared/resolve_actor.dg, send_compensation_emails.dg.
+//
+// Returns a JSON-stringified Map — Standalone category functions can only declare return type
+// string.
+
+string standalone.digest_send_mention_emails(String dealId, String note, String viewAsUserId)
+{
+	actingUserId = standalone.resolveActor(viewAsUserId);
+	standalone.sendCompensationEmails(dealId, note, actingUserId);
+	result = Map();
+	result.put("ok", true);
+	return result.toString();
+}

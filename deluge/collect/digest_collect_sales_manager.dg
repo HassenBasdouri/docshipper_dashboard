@@ -1,0 +1,112 @@
+// digest_collect_sales_manager.dg — Sales Manager profile's nightly CRM read (D1-D8 routing).
+//
+// This is the original single-user prototype's collect logic, parameterized by userId instead
+// of a hardcoded Alexis id, with steps 1/2/4 factored out into ../shared/collect_own_tasks_calls.dg
+// and ../shared/classify_initial_deals.dg. Calling this with Alexis's own id computes exactly
+// what it always has — see ../../CLAUDE.md and ../../ANALYSIS.md for the v24.1 policy context.
+//
+// TODO before first real run: confirm every module/field name against the live org.
+//
+// Returns a JSON-stringified Map — Standalone category functions can only declare return type
+// string; callers parse the result back with .toMap() immediately at the call site.
+
+string standalone.digest_collect_sales_manager(String userId)
+{
+	today = zoho.currentdate;
+	todayStr = today.toString("yyyy-MM-dd");
+
+	result = Map();
+	result.put("run_date", todayStr);
+	result.put("profile", "Sales Manager");
+
+	// --- 1+2. This user's active Tasks/Calls (the "badge") + deal facts. ---
+	own = standalone.collectOwnTasksCalls(userId).toMap();
+	dealIds = own.get("deal_ids");
+	dealFacts = own.get("deal_facts");
+	result.put("personal_tasks_deal_ids", dealIds);
+	result.put("personal_tasks_deal_facts", dealFacts); // "Personal Tasks" is common to every profile (see ../../CLAUDE.md) — same bundle 004-SALES/stub use
+
+	// --- 3. Deterministic routing (D1-D8) — owner checks, weekday math. No LLM here. ---
+	path1Candidates = List();
+	path2Candidates = List();
+	supervisionCandidates = List();
+
+	for each dealId in dealIds {
+		deal = dealFacts.get(dealId);
+		if (deal == null) { continue; }
+		stage = deal.get("Stage");
+		if (stage == "Lost" || stage == "Junk" || stage == "Won") { continue; } // pipeline counts always exclude these
+
+		// B6: who else has an active item on this deal? (batched by ~22, per F.)
+		otherActiveItems = zoho.crm.searchRecords("Tasks", "(What_Id:equals:" + dealId + ")and(Status:equals:Not Started)");
+		// Outgoing_Call_Status isn't a searchable field in this org (see ../shared/collect_own_tasks_calls.dg's
+		// header) — fetch by What_Id alone and filter Scheduled/Overdue in Deluge.
+		callsOnDeal = zoho.crm.searchRecords("Calls", "(What_Id:equals:" + dealId + ")");
+		otherActiveCalls = List();
+		for each c in callsOnDeal {
+			status = c.get("Outgoing_Call_Status");
+			if (status == "Scheduled" || status == "Overdue") { otherActiveCalls.add(c); }
+		}
+		someoneElseIsOnIt = false;
+		referentName = null; // first other owner encountered — feeds "PATH 3 — Supervision"'s grouping in generate/digest_finish_sales_manager.dg
+		for each item in otherActiveItems {
+			if (item.get("Owner").get("id") != userId) {
+				someoneElseIsOnIt = true;
+				if (referentName == null) { referentName = item.get("Owner").get("name"); }
+			}
+		}
+		for each item in otherActiveCalls {
+			if (item.get("Owner").get("id") != userId) {
+				someoneElseIsOnIt = true;
+				if (referentName == null) { referentName = item.get("Owner").get("name"); }
+			}
+		}
+
+		row = Map();
+		row.putAll(deal); // flattens ds/client/stage/route (see ../shared/trim_deal_fields.dg) onto the row itself — app/js/render.js reads them off the top level, not nested
+		row.put("deal_id", dealId);
+
+		if (someoneElseIsOnIt) {
+			row.put("referent", referentName);
+			supervisionCandidates.add(row); // D4 — path 3, supervision
+		} else {
+			path2Candidates.add(row); // D3 — path 2, no one else on it
+		}
+		// D2 (path 1 — question awaiting the pilot / real delay) needs the chat-tail read; left for
+		// the sub-step below since it's per-deal I/O, batch it rather than looping request-per-request
+		// in production — kept simple here as a placeholder loop.
+	}
+
+	// --- 4. Initial (dispatch queue) — Gold detection is pure data, no LLM needed for the flag. ---
+	// Trimmed via ../shared/trim_deal_fields.dg — searchRecords returns the full record, and this
+	// ends up embedded in the Claude prompt (see ../shared/collect_own_tasks_calls.dg's header for
+	// why that matters — an untrimmed prompt hit Anthropic's 200,000-token limit live).
+	initialDealsRaw = zoho.crm.searchRecords("Deals", "(Owner:equals:" + userId + ")and(Stage:equals:Initial)");
+	initialDeals = List();
+	for each d in initialDealsRaw { initialDeals.add(standalone.trimDealFields(d).toMap()); }
+	initialRows = standalone.classifyInitialDeals(initialDeals.toString()).toJSONList();
+
+	// --- 5. B2B Lost, queried independently of the badge (D5 — must show even off-badge). ---
+	b2bLostRaw = zoho.crm.searchRecords("Deals", "(Owner:equals:" + userId + ")and(Stage:equals:B2B Lost)");
+	b2bRedispatchRows = List();
+	b2bPilotedRows = List();
+	for each dealRaw in b2bLostRaw {
+		deal = standalone.trimDealFields(dealRaw).toMap();
+		activeAeItems = zoho.crm.searchRecords("Tasks", "(What_Id:equals:" + deal.get("id") + ")and(Status:equals:Not Started)");
+		if (activeAeItems.size() > 0) {
+			deal.put("item", activeAeItems.get(0).get("Subject")); // "Covering item" column (app/js/render.js's info-table) — the active Task that makes this deal already-piloted, not just the fact that one exists
+			b2bPilotedRows.add(deal); // already piloted by an AE — info only
+		} else {
+			b2bRedispatchRows.add(deal); // needs the "why lost" read + re-dispatch note (step 2)
+		}
+	}
+
+	result.put("path1_candidates", path1Candidates);
+	result.put("path2_candidates", path2Candidates);
+	result.put("supervision_candidates", supervisionCandidates);
+	result.put("initial_rows", initialRows);
+	result.put("b2b_redispatch_candidates", b2bRedispatchRows);
+	result.put("b2b_piloted_rows", b2bPilotedRows);
+
+	return result.toString();
+}

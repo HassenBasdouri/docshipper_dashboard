@@ -2,7 +2,7 @@
 // renders the fixed template — no COQL, no sub-agents, no LLM call happens here.
 import { loadDigest } from "./js/digestLoader.js";
 import { renderDigest } from "./js/render.js";
-import { getCurrentUser, initZoho } from "./js/zohoApi.js";
+import { getCurrentUser, getOrgDomain, initZoho } from "./js/zohoApi.js";
 import * as actions from "./js/actions.js";
 import { PROFILE_LABELS } from "./js/config.js";
 import { DEV_VIEWER_ID, listActiveUsers, getViewAsSelection, setViewAsSelection } from "./js/viewAs.js";
@@ -25,8 +25,9 @@ async function init() {
     const effectiveUserId = (isViewer && getViewAsSelection()) || (user && user.id) || null;
 
     const digest = await loadDigest(effectiveUserId);
-    const crmDomain = (user && user.zuid && window.location.hostname) || window.location.hostname;
+    const crmDomain = (await getOrgDomain()) || "crm.zoho.com";
 
+    actions.setCurrentUser(user && user.id);
     actions.setViewAsUser(isViewer ? getViewAsSelection() : null);
 
     status.hidden = true;
@@ -38,7 +39,7 @@ async function init() {
   } catch (err) {
     status.hidden = false;
     status.className = "status error";
-    status.textContent = `Impossible de charger le digest : ${err.message || err}`;
+    status.textContent = `Unable to load the digest: ${err.message || err}`;
   }
 }
 
@@ -52,7 +53,7 @@ function showViewAsBanner(digest) {
   const digestRoot = document.getElementById("digest-root");
   const banner = document.createElement("div");
   banner.className = "view-as-banner";
-  banner.textContent = `Vue test — ${digest.profile || "profil inconnu"} (${digest.user_id || "?"})`;
+  banner.textContent = `Test view — ${digest.profile || "unknown profile"} (${digest.user_id || "?"})`;
   digestRoot.parentNode.insertBefore(banner, digestRoot);
 }
 
@@ -66,7 +67,7 @@ async function renderViewAsControl(user) {
   const wrap = document.createElement("div");
   wrap.className = "view-as";
   const label = document.createElement("span");
-  label.textContent = "Vue test :";
+  label.textContent = "Test view:";
   const select = document.createElement("select");
   users.forEach((u) => {
     const opt = document.createElement("option");

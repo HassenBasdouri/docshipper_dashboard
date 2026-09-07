@@ -1,0 +1,24 @@
+// strip_json_fence.dg — Claude sometimes wraps its JSON output in a markdown code fence
+// ("```json\n{...}\n```") even when the prompt asks for "ONLY a JSON object, with no surrounding
+// text" — confirmed live: this broke `writtenText.toMap()` in every digest_finish_<profile>.dg
+// with "Invalid JSON Format String", since the fence markers aren't valid JSON.
+//
+// A regex-based strip (leading ```<lang>\n? / trailing ```\s*) was tried first but did nothing
+// live (cleaned text came back the exact same length as the input) — Deluge's regex engine has
+// already proven surprising more than once this session (e.g. rejecting an escaped "{" as
+// invalid), so this avoids regex entirely: find the first "{" and the last "}" and extract
+// exactly that substring. Robust to whatever surrounds the real JSON (fence markers, language
+// tags, whitespace) regardless of exact formatting. Safe to call unconditionally — if the text is
+// already fence-free JSON, this still finds the same first "{"/last "}" and returns equivalent
+// content (modulo any leading/trailing whitespace, already trimmed).
+
+string standalone.stripJsonFence(String text)
+{
+	cleaned = text.trim();
+	startIdx = cleaned.indexOf("{");
+	endIdx = cleaned.lastIndexOf("}");
+	if (startIdx >= 0 && endIdx > startIdx) {
+		cleaned = cleaned.subText(startIdx, endIdx + 1);
+	}
+	return cleaned.trim();
+}

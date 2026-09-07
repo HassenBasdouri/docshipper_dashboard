@@ -7,18 +7,18 @@
     "total": 9,
     "very_grave": false,
     "pills": [
-      { "label": "bloqués", "count": 2, "tone": "crit" },
-      { "label": "à toi seule", "count": 1, "tone": "warn" },
-      { "label": "tasks perso", "count": 2 },
+      { "label": "blocked", "count": 2, "tone": "crit" },
+      { "label": "on you alone", "count": 1, "tone": "warn" },
+      { "label": "personal tasks", "count": 2 },
       { "label": "supervision", "count": 2, "tone": "good" },
-      { "label": "deals clos", "count": 2 }
+      { "label": "closed deals", "count": 2 }
     ]
   },
   "sections": [
     {
       "key": "initial",
       "type": "initial-dispatch",
-      "title": "AXE 1 — INITIAL",
+      "title": "AXIS 1 — INITIAL",
       "accent": "gold",
       "data": {
         "groups": [
@@ -31,8 +31,8 @@
                 "client": "Sample Client",
                 "route": "Shanghai → Le Havre · 40' HQ · 1200kg · CIF · Web · 27/08",
                 "suggested_ae_id": "4664241000329095001",
-                "note": "- FCL déjà défini (40' HQ)\n- Docs fournis : facture, packing list\n- Manquent : code HS, proforma",
-                "gold_estimate": "Composite 4526 USD/40' (+4% s/s) — indicative, hors droits, à confirmer.",
+                "note": "- FCL already set (40' HQ)\n- Docs provided: invoice, packing list\n- Missing: HS code, proforma",
+                "gold_estimate": "Composite 4526 USD/40' (+4% s/s) — indicative, excluding duties, to be confirmed.",
                 "followup": { "type": "task", "date": "2026-08-31" }
               }
             ]
@@ -41,10 +41,10 @@
       }
     },
     {
-      "key": "voie1",
+      "key": "path1",
       "type": "card-list",
-      "kind": "voie1",
-      "title": "VOIE 1 — ça n'est pas passé",
+      "kind": "path1",
+      "title": "PATH 1 — Didn't go through",
       "accent": "crit",
       "data": [
         {
@@ -53,9 +53,9 @@
           "client": "Gerard GIONET",
           "stage": "Shipping Operation",
           "route": "",
-          "passe": ["Joshua SINAMBAN attend validation des expenses.", "Vol booké au 01/09, livraison le 02/09."],
-          "propose": "Valider les expenses pour débloquer.",
-          "note": "@Amal BEN AMOR expenses en attente — vol le 01/09.",
+          "happened": ["Joshua SINAMBAN is waiting on expense validation.", "Flight booked for 09/01, delivery on 09/02."],
+          "proposal": "Validate the expenses to unblock.",
+          "note": "@Amal BEN AMOR expenses pending — flight on 09/01.",
           "target_tag": "Amal BEN AMOR",
           "record_id": "3001",
           "record_module": "Calls",
@@ -66,25 +66,25 @@
       ]
     },
     {
-      "key": "voie2",
+      "key": "path2",
       "type": "card-list",
-      "kind": "voie2",
-      "title": "VOIE 2 — personne d'autre dessus",
+      "kind": "path2",
+      "title": "PATH 2 — No one else on it",
       "accent": "warn",
       "data": []
     },
     {
-      "key": "tasks_perso",
+      "key": "personal_tasks",
       "type": "card-list",
-      "kind": "perso",
-      "title": "Tasks personnelles",
+      "kind": "personal",
+      "title": "Personal Tasks",
       "accent": "info",
       "data": []
     },
     {
       "key": "supervision",
       "type": "supervision",
-      "title": "VOIE 3 — supervision",
+      "title": "PATH 3 — Supervision",
       "accent": "good",
       "data": {
         "groups_by_referent": [
@@ -96,9 +96,9 @@
                 "ds": "DS-52568",
                 "client": "Lina Georges",
                 "stage": "Final quote sent",
-                "covered_by": "Task — passage en Won demandé le 25/08",
-                "ou_ca_en_est_line": "Jordan a demandé le passage en Won le 25/08.",
-                "ou_ca_en_est_waiting": "validation Won",
+                "covered_by": "Task — Won transition requested on 08/25",
+                "status_line": "Jordan requested the Won transition on 08/25.",
+                "status_waiting": "Won validation",
                 "resume_date": "2026-09-01",
                 "record_id": "5001",
                 "record_module": "Calls"
@@ -111,7 +111,7 @@
     {
       "key": "b2b_lost_redispatch",
       "type": "b2b-redispatch",
-      "title": "B2B Lost à redispatcher",
+      "title": "B2B Lost to Redispatch",
       "accent": "gold",
       "data": [
         {
@@ -119,14 +119,14 @@
           "ds": "DS-39814",
           "client": "BUCH",
           "route": "Qingdao → Illzach",
-          "heat": "chaud",
-          "why_lost": "Aucune raison de perte tracée — s'arrête sur PDV 6522 EUR le 16/07/2025.",
-          "angle": "Finaliser l'achat conteneur, proposer l'ouverture usine turque.",
+          "heat": "hot",
+          "why_lost": "No loss reason tracked — stops at PDV 6522 EUR on 07/16/2025.",
+          "angle": "Finalize the container purchase, propose opening the Turkish factory.",
           "old_owner": "Constance Dittrich",
           "docs": "PDV",
-          "missing": "code HS, inventaire valorisé",
+          "missing": "HS code, valued inventory",
           "suggested_ae_id": "4664241000329095001",
-          "note": "@Jordan Dubois B2B lost à recontacter — c'était à Constance Dittrich."
+          "note": "@Jordan Dubois B2B lost to recontact — it was Constance Dittrich's."
         }
       ]
     },
@@ -134,16 +134,16 @@
       "key": "b2b_lost_piloted",
       "type": "info-table",
       "cols": ["ds", "client", "ae", "item"],
-      "title": "B2B Lost déjà pilotés",
+      "title": "B2B Lost Already Handled",
       "accent": "gold",
       "data": [
-        { "deal_id": "7", "ds": "DS-33161", "client": "Sample", "ae": "Yanis Huin", "item": "Call B2B LOST 05/09" }
+        { "deal_id": "7", "ds": "DS-33161", "client": "Sample", "ae": "Yanis Huin", "item": "Call B2B LOST 09/05" }
       ]
     },
     {
       "key": "deals_closed",
       "type": "ghost-table",
-      "title": "Deals réellement clos",
+      "title": "Deals Actually Closed",
       "accent": "gold",
       "data": [
         { "deal_id": "8", "ds": "DS-58140", "client": "Sample", "stage": "Lost", "closed_by": "Alexis M.", "closed_date": "2026-08-20", "record_id": "9001" }
@@ -163,15 +163,15 @@
           "client": "Sample Ops",
           "stage": "Shipping Operation",
           "route": "",
-          "note": "112 jours, sans OP, sans SI, zéro fil mail.",
+          "note": "112 days, no OP, no SI, zero email thread.",
           "note_editable": false
         }
       ]
     }
   ],
   "method_footer": {
-    "counts": { "voie1": 1, "voie2": 0, "supervision": 1, "b2b_lost_redispatch": 1 },
-    "anomalies": ["DS-58203 SI Date antérieure au stage"],
-    "note": "Échantillon local — pas un vrai run."
+    "counts": { "path1": 1, "path2": 0, "supervision": 1, "b2b_lost_redispatch": 1 },
+    "anomalies": ["DS-58203 SI Date earlier than the stage"],
+    "note": "Local sample — not a real run."
   }
 }

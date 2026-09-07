@@ -1,0 +1,27 @@
+// classify_initial_deals.dg — Gold-heat detection is pure data, no LLM needed for the flag.
+// Reused by every profile's collector that has an Initial-stage dispatch queue.
+//
+// Returns a JSON-stringified List of rows — Standalone category functions can only declare
+// return type string (and only accept string/int/date/float/bool/map as argument types — not
+// List — confirmed by a live "Invalid Argument Type List" error); callers pass `.toString()` of
+// their List and parse the result back with `.toJSONList()` immediately at the call site.
+
+string standalone.classifyInitialDeals(String dealsJson)
+{
+	deals = dealsJson.toJSONList();
+	goldPairs = {"China": true, "Vietnam": true, "Hong Kong": true}; // TODO: replace with the real Asia<->Europe country-pair table
+	rows = List();
+	for each deal in deals {
+		dep = deal.get("Country_of_Departure");
+		arr = deal.get("Country_of_Arrival");
+		isGold = (goldPairs.containKey(dep) || goldPairs.containKey(arr)); // placeholder — real rule: Asia<->Europe, excluding Middle East
+		heat = "medium"; // TODO: full C1 speed-tiering (fast/medium/caution/slow)
+		if (isGold) { heat = "gold"; }
+		row = Map();
+		row.putAll(deal); // flattens ds/client/stage/route (see ../shared/trim_deal_fields.dg) onto the row itself — app/js/render.js reads them off the top level, not nested
+		row.put("deal_id", deal.get("id"));
+		row.put("heat", heat);
+		rows.add(row);
+	}
+	return rows.toString();
+}

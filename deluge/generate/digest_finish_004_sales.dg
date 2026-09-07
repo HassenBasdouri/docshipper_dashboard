@@ -1,0 +1,57 @@
+// digest_finish_004_sales.dg — the second half of what used to be digest_generate_004_sales.dg
+// (see digest_build_004_sales_request.dg for the first half and
+// ../generate/digest_build_sales_manager_request.dg's header for the full split-for-batching
+// context). Takes the raw text Claude already wrote instead of making the invokeurl call itself.
+//
+// Returns a JSON-stringified Map ({url, run_date, profile}, straight from ../shared/upload_digest.dg)
+// — Standalone category functions can only declare return type string. Every ../shared/ helper
+// this function calls is itself string-returning for the same reason; each call site below parses
+// the result back with .toMap()/.toJSONList() immediately so nothing downstream changes shape.
+
+string standalone.digest_finish_004_sales(String userId, Map collected, String writtenText)
+{
+	// Claude sometimes wraps its JSON output in a markdown code fence even though the prompt asks
+	// for JSON only — confirmed live ("Invalid JSON Format String"). See ../shared/strip_json_fence.dg.
+	cleanedWrittenText = standalone.stripJsonFence(writtenText);
+	info "digest_finish_004_sales: writtenText (length " + writtenText.length() + ") after fence-strip (length " + cleanedWrittenText.length() + "): " + cleanedWrittenText;
+	written = cleanedWrittenText.toMap();
+
+	todayStr = collected.get("run_date");
+
+	// buildPersonalTasksRows is deterministic (doesn't depend on anything Claude wrote), so it's
+	// recomputed here from `collected` rather than also persisting its output in the pending-batch
+	// state blob alongside `collected` itself — see ../generate/digest_build_004_sales_request.dg,
+	// where the same call produced the rows sent to Claude in the prompt.
+	personalTasksRows = standalone.buildPersonalTasksRows(collected.get("personal_tasks_deal_ids").toString(), collected.get("personal_tasks_deal_facts")).toJSONList();
+
+	// `written.get(...)` can legitimately be null when a section had no LLM output — no ternary
+	// (Deluge doesn't support `?:`, confirmed by a live "? is not supported in Deluge" error), so
+	// this is an explicit if block per value instead of an inline conditional expression.
+	writtenPersonalTasks = written.get("personal_tasks");
+	writtenPersonalTasksJson = null;
+	if (writtenPersonalTasks != null) { writtenPersonalTasksJson = writtenPersonalTasks.toString(); }
+	personalTasksMerged = standalone.mergeSection(personalTasksRows.toString(), writtenPersonalTasksJson, "deal_id").toJSONList();
+
+	writtenB2bLostOwn = written.get("b2b_lost_own");
+	writtenB2bLostOwnJson = null;
+	if (writtenB2bLostOwn != null) { writtenB2bLostOwnJson = writtenB2bLostOwn.toString(); }
+	b2bLostOwnMerged = standalone.mergeSection(collected.get("b2b_lost_own_rows").toString(), writtenB2bLostOwnJson, "deal_id").toJSONList();
+	initialOwnData = standalone.groupDealsByHeat(collected.get("initial_own_rows").toString()).toMap();
+
+	sections = List();
+	sections.add(standalone.makeSection("personal_tasks", "card-list", "Personal Tasks", "info", personalTasksMerged.toString(), "list", "personal", null).toMap());
+	sections.add(standalone.makeSection("initial_own", "initial-info", "My Initial Deals", "gold", initialOwnData.toString(), "map", null, null).toMap());
+	sections.add(standalone.makeSection("b2b_lost_own", "card-list", "My B2B Lost to Recover", "gold", b2bLostOwnMerged.toString(), "list", "b2b_lost_own", null).toMap());
+
+	finalDigest = Map();
+	finalDigest.put("run_date", todayStr);
+	finalDigest.put("status", "delivered");
+	finalDigest.put("user_id", userId);
+	finalDigest.put("profile", "004-SALES");
+	finalDigest.put("badge", Map()); // TODO: pill computation not specified for this profile yet — same honest gap as the Sales Manager generator
+	finalDigest.put("sections", sections);
+	finalDigest.put("method_footer", Map());
+
+	finalDigestJson = finalDigest.toString();
+	return standalone.uploadDigest(userId, finalDigestJson, "004-SALES", todayStr);
+}

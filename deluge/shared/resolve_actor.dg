@@ -1,0 +1,30 @@
+// resolve_actor.dg — the single source of truth for "who is really acting," used by the small
+// set of Deluge functions that still need it after the client-side CRUD split (see
+// ../actions/README below and ../../CLAUDE.md): the three Sales-Manager-only actions
+// (dispatch/redispatch/supervision-batch, which change deal ownership and need a real
+// server-side profile gate) and the compensation-email sender.
+//
+// zoho.loginuserid is NOT client-supplied — it comes from Deluge's own session, so a malicious
+// widget can't fake it — but it's the user's EMAIL, not their CRM record id (see
+// get_user_id_by_email.dg's header for why). This resolves that email to a real user id, and
+// applies the ONE allowed impersonation exception: the test/admin viewer (Hassen, see
+// ../../app/js/viewAs.js's DEV_VIEWER_ID) may pass viewAsUserId to test as another profile — and
+// it only takes effect when the REAL session really is his, never based on anything the client
+// claims about itself.
+//
+// Calling another Standalone function from inside a Deluge function requires the qualified
+// `standalone.<name>(...)` form, not the bare name — confirmed live (calling `getUserIdByEmail`
+// bare deployed but resolved to nothing at runtime until qualified). Every call from one of this
+// repo's own functions into another follows this same convention.
+
+string standalone.resolveActor(String viewAsUserId)
+{
+	HASSEN_EMAIL = "hassen.b@docshipper.com";
+	realEmail = zoho.loginuserid;
+	realUserId = standalone.getUserIdByEmail(realEmail);
+
+	if (realEmail == HASSEN_EMAIL && viewAsUserId != null && viewAsUserId != "") {
+		return viewAsUserId;
+	}
+	return realUserId;
+}

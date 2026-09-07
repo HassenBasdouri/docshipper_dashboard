@@ -1,0 +1,51 @@
+// extract_tags.dg — resolves @mentions in a note to {first_name, email, is_cs_simple}. Private
+// helper for send_compensation_emails.dg.
+//
+// The widget's own tag-select dropdown (app/js/render.js's insertTag) only ever inserts the
+// literal "@<full CRM name> " — never free-typed text — and a note's text can also come
+// pre-written by Claude the night before (generate/digest_build_sales_manager_request.dg /
+// digest_build_004_sales_request.dg), which is expected to @mention people the same way. So this matches on the
+// literal "@<full_name>" substring rather than attempting a general name-shaped regex extraction
+// — simpler, and loses nothing an unresolvable free-text name would have given anyway.
+//
+// Name/email resolution queries the live CRM "users" module (same pattern as
+// ../shared/get_user_id_by_email.dg) instead of a hardcoded roster, so a newly hired user is
+// covered automatically the moment they exist in CRM — no repo edit needed. The one piece that
+// can't come from CRM is the CS "simple" exemption from the A7 compensation email
+// (Important#5): there's no confirmed CRM field encoding that classification, so CS_SIMPLE_EMAILS
+// below stays a small, deliberately hand-maintained list mirroring
+// ../../app/js/config.js's TEAM.cs/requiresCompensationEmail — keep both in sync when CS staff
+// changes (onboarding a new AE/OP/manager needs no edit here or there; onboarding a new CS
+// "simple" does).
+//
+// TODO before first real run: same "users" pseudo-module caveats as get_user_id_by_email.dg /
+// get_user_info.dg — confirm "full_name" is the right field name on this org, and this only
+// fetches the first 200 active users.
+//
+// Returns a JSON-stringified List of {first_name, email, is_cs_simple} — Standalone category
+// functions can only declare return type string; callers parse the result back with
+// .toJSONList() immediately at the call site.
+
+string standalone.extractTags(String note)
+{
+	CS_SIMPLE_EMAILS = {"alba.m@docshipper.com": true, "eddie.s@docshipper.com": true, "stephane.h@docshipper.com": true, "sarah.r@docshipper.com": true};
+
+	users = zoho.crm.getRecords("users", 1, 200, {"type": "ActiveUsers"}).get("users");
+
+	tags = List();
+	for each u in users {
+		fullName = u.get("full_name");
+		if (fullName == null || fullName == "") { continue; }
+		mention = "@" + fullName;
+		if (note.contains(mention)) {
+			nameParts = fullName.toList(" ");
+			email = u.get("email");
+			tag = Map();
+			tag.put("first_name", nameParts.get(0));
+			tag.put("email", email);
+			tag.put("is_cs_simple", CS_SIMPLE_EMAILS.containKey(email));
+			tags.add(tag);
+		}
+	}
+	return tags.toString();
+}

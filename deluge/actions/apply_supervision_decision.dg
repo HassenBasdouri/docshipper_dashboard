@@ -1,0 +1,37 @@
+// apply_supervision_decision.dg — private helper for digest_apply_supervision_batch.dg. Applies
+// one row's decision (reschedule or delete), enforcing the same "only your own items" guard
+// (D4) the single-item actions used to enforce server-side before those moved to direct
+// client-side ZOHO.CRM.API calls (see ../../app/js/crmApi.js) — this one stays server-side
+// because it's part of the Sales-Manager-only batch action, not because deleting/rescheduling a
+// Task/Call is inherently privileged.
+//
+// Depends on ../shared/get_record_owner_id.dg.
+
+string standalone.applySupervisionDecision(Map decision, String actingUserId)
+{
+	recordId = decision.get("recordId");
+	module = decision.get("module");
+	ownerId = standalone.getRecordOwnerId(module, recordId);
+	if (ownerId != actingUserId) { return ""; } // D4 — the consigne only ever touches the acting user's items
+
+	if (decision.get("decision") == "delete") {
+		deleteMap = Map();
+		deleteMap.put("module", module);
+		deleteMap.put("id", recordId);
+		result = zoho.crm.invokeConnector("crm.delete", deleteMap); // zoho.crm.deleteRecord() isn't a real Deluge task
+		return result.toString();
+	} else if (decision.get("decision") == "reschedule") {
+		newDate = decision.get("resumeDate"); // resume date already computed in step 1 (D4 — next business day after the referent's due date)
+		update = Map();
+		update.put("id", recordId);
+		if (module == "Calls") {
+			update.put("Call_Start_Time", newDate + "T00:00:00+07:00");
+			update.put("Outgoing_Call_Status", "Scheduled"); // F. — without this it stays "Overdue"
+		} else {
+			update.put("Due_Date", newDate);
+		}
+		result = zoho.crm.updateRecord(module, recordId, update);
+		return result.toString();
+	}
+	return "";
+}

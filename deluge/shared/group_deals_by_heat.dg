@@ -1,0 +1,31 @@
+// group_deals_by_heat.dg — groups a list of Initial-stage deal rows (each already carrying a
+// "heat" field from classify_initial_deals.dg) into the {groups:[{heat,deals}]} shape
+// app/js/render.js's "initial-dispatch"/"initial-info" section types expect. Shared by every
+// profile's generator that has an Initial section.
+//
+// Returns a JSON-stringified Map — Standalone category functions can only declare return type
+// string (and only accept string/int/date/float/bool/map as argument types — not List —
+// confirmed by a live "Invalid Argument Type List" error); callers pass `.toString()` of their
+// List and parse the result back with `.toMap()` immediately at the call site.
+
+string standalone.groupDealsByHeat(String rowsJson)
+{
+	rows = rowsJson.toJSONList();
+	byHeat = Map();
+	for each row in rows {
+		heat = row.get("heat");
+		group = byHeat.get(heat);
+		if (group == null) { group = List(); byHeat.put(heat, group); }
+		group.add(row);
+	}
+	groups = List();
+	for each heat in byHeat.keys() {
+		g = Map();
+		g.put("heat", heat);
+		g.put("deals", byHeat.get(heat));
+		groups.add(g);
+	}
+	data = Map();
+	data.put("groups", groups);
+	return data.toString();
+}

@@ -69,8 +69,11 @@ itself makes **zero live COQL calls** when Alexis opens it.
 │      every subsequent day the rules don't change)                    │
 │    - User content = only the small dynamic JSON from step 1          │
 │      (deal facts, chat tails, task/call state) — not the full CRM    │
+│    - Sales Manager only: live MCP hop to Zoho's own CRM MCP server   │
+│      for a deal's Notes/Attachments/Emails (C2bis), on-demand, not   │
+│      pre-fetched — see ../deluge/README.md's deployment checklist    │
 │    - Output = structured JSON (note text per deal, heat rating,      │
-│      "où ça en est" lines, badge labels) — NOT hand-written HTML     │
+│      "where it stands" lines, badge labels) — NOT hand-written HTML  │
 │    - Result appended into the same Digest_Run record                 │
 └─────────────────────────────────────────────────────────────────────┘
                               │ pre-computed data + pre-written notes
@@ -83,7 +86,7 @@ itself makes **zero live COQL calls** when Alexis opens it.
 │      → owner change / createRecords MessagesChat / createNotesModule │
 │        / delete / reschedule — using the note text already written   │
 │        in step 2. No round-trip to an LLM, no copy-paste.            │
-│    - Compensation email (A7) sent via a Deluge-side Gmail connection │
+│    - Compensation email (A7) sent via sendmentionemail (admin)       │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -128,24 +131,24 @@ instead of one global digest.
     "profile": "Sales Manager",
     "badge": { "total": 9, "very_grave": false, "pills": [...] },
     "sections": [
-      { "key": "initial", "type": "initial-dispatch", "title": "AXE 1 — INITIAL", "accent": "gold",
+      { "key": "initial", "type": "initial-dispatch", "title": "AXIS 1 — INITIAL", "accent": "gold",
         "data": { "groups": [ { "heat": "gold", "deals": [ { "ds": "DS-58854", ... } ] } ] } },
-      { "key": "voie1", "type": "card-list", "kind": "voie1", "title": "VOIE 1 — ça n'est pas passé", "accent": "crit",
-        "data": [ { "ds": "...", "passe": [...], "propose": "...", "note": "...", "target_tag": "...", "followup": {...} } ] },
-      { "key": "voie2", "type": "card-list", "kind": "voie2", "title": "VOIE 2 — personne d'autre dessus", "accent": "warn", "data": [...] },
-      { "key": "tasks_perso", "type": "card-list", "kind": "perso", "title": "Tasks personnelles", "accent": "info", "data": [...] },
-      { "key": "supervision", "type": "supervision", "title": "VOIE 3 — supervision", "accent": "good",
+      { "key": "path1", "type": "card-list", "kind": "path1", "title": "PATH 1 — Didn't go through", "accent": "crit",
+        "data": [ { "ds": "...", "happened": [...], "proposal": "...", "note": "...", "target_tag": "...", "followup": {...} } ] },
+      { "key": "path2", "type": "card-list", "kind": "path2", "title": "PATH 2 — No one else on it", "accent": "warn", "data": [...] },
+      { "key": "personal_tasks", "type": "card-list", "kind": "personal", "title": "Personal Tasks", "accent": "info", "data": [...] },
+      { "key": "supervision", "type": "supervision", "title": "PATH 3 — Supervision", "accent": "good",
         "data": { "groups_by_referent": [ { "referent": "...", "rows": [...] } ] } },
-      { "key": "b2b_lost_redispatch", "type": "b2b-redispatch", "title": "B2B Lost à redispatcher", "accent": "gold",
-        "data": [ { "ds": "...", "old_owner": "...", "heat": "chaud", "why_lost": "...", "angle": "...", "note": "..." } ] },
-      { "key": "b2b_lost_piloted", "type": "info-table", "cols": ["ds","client","ae","item"], "title": "B2B Lost déjà pilotés", "accent": "gold", "data": [...] },
-      { "key": "deals_closed", "type": "ghost-table", "title": "Deals réellement clos", "accent": "gold", "data": [...] },
+      { "key": "b2b_lost_redispatch", "type": "b2b-redispatch", "title": "B2B Lost to Redispatch", "accent": "gold",
+        "data": [ { "ds": "...", "old_owner": "...", "heat": "hot", "why_lost": "...", "angle": "...", "note": "..." } ] },
+      { "key": "b2b_lost_piloted", "type": "info-table", "cols": ["ds","client","ae","item"], "title": "B2B Lost Already Handled", "accent": "gold", "data": [...] },
+      { "key": "deals_closed", "type": "ghost-table", "title": "Deals Actually Closed", "accent": "gold", "data": [...] },
       { "key": "vigilance", "type": "card-list", "kind": "vig", "opts": { "noteOnly": true }, "title": "Vigilance", "accent": "neutral", "data": [...] }
     ],
     "method_footer": { "counts": {...}, "anomalies": [...] }
   }
   ```
-  A profile like 004-SALES sends a much shorter `sections` list (`tasks_perso`, a read-only
+  A profile like 004-SALES sends a much shorter `sections` list (`personal_tasks`, a read-only
   `initial-info` section, and a note-post-only `b2b_lost_own` card list) — see
   `app/sample-digest-004-sales.json` for a full example, and `../CLAUDE.md`'s "Adding a new
   profile" for how a new profile's collector/generator populates this envelope.
@@ -166,8 +169,8 @@ Example — "Dispatcher ce deal →" on an Initial:
    right before posting — this one check can't be pre-computed the night before since the CRM
    may have changed) via one Deluge function call.
 2. That Deluge function does, in order: owner change (`updateRecords` + `trigger:["workflow"]`) →
-   channel check → `createRecords`/`createNotesModule` → Gmail compensation send (A7, skipped for
-   CS-only tags per A2) → returns success/failure to the widget, which collapses the card
+   channel check → `createRecords`/`createNotesModule` → `sendmentionemail` compensation send (A7,
+   skipped for CS-only tags per A2) → returns success/failure to the widget, which collapses the card
    (client-side, matching the current B10 reversible-collapse UX) and decrements the local badge
    count. No LLM call anywhere in this path.
 3. Supervision table (D4) "Appliquer mes choix →" batches the same way: one Deluge function call
@@ -175,22 +178,22 @@ Example — "Dispatcher ce deal →" on an Initial:
 
 ## 6. Open items to confirm before scaffolding code
 
-- **Zoho edition**: Widgets and custom Connections (for Gmail OAuth from Deluge) require
+- **Zoho edition**: Widgets and custom Connections (needed for the WorkDrive Connection) require
   CRM Enterprise or above — please confirm the org's edition.
-- **Gmail sending from Deluge**: needs a Zoho CRM *Connection* authorized against Alexis's Gmail
-  (OAuth), since Deluge's native `sendmail` won't originate from her real Gmail address the way
-  A7 requires. Do you have (or can you create) that Connection, or should this stay on the
-  Gmail MCP connector for just the send step?
-- **Google Drive pricing lookup (C6)**: still read-only and low-frequency (Gold deals in
-  degraded mode) — fine to leave as an occasional external call rather than building it into the
-  nightly job, unless you want it folded in too.
+- ~~**Gmail sending from Deluge**~~ — resolved: A7 compensation sends go through
+  `sendmentionemail`, an already-deployed Deluge Standalone function that sends from
+  `zoho.adminuserid`, no per-user Gmail OAuth Connection needed. No Gmail dependency remains.
+- ~~**Google Drive pricing lookup (C6)**~~ — settled as a non-goal: this deployment never reads
+  DocShipper's internal pricing history. Gold-deal estimates stay limited to the public Drewry WCI
+  index (house-rules doc §C5) by design, not as an interim gap.
 - **Custom module creation rights**: `Digest_Run` needs to be created once in Zoho CRM setup
   (or reuse an existing free-form module) — confirm you can create custom modules on this org.
 - **Claude API access for the nightly Deluge job**: this needs a real Anthropic API key (server-
   side), separate from your interactive Claude usage, called via Deluge's `invokeurl`.
 
-Once these are confirmed, the remaining wiring is: creating the `Digest_url` org variable,
-pointing the Deluge jobs at a real Anthropic API key and WorkDrive folder, and connecting the
-action functions in `deluge/digest_actions.dg` to the widget's buttons in Zoho CRM's function
-list. The widget scaffold, loader, and Deluge reference sources are now in this repo (see
-`CLAUDE.md`).
+Once these are confirmed, the remaining wiring is: creating the `Digest_registry` org variable,
+pointing the Deluge jobs at a real Anthropic API key and WorkDrive folder, and connecting the 4
+server-side action functions in `deluge/actions/` to the widget's buttons in Zoho CRM's function
+list (most action buttons now write directly via `ZOHO.CRM.API` from the widget instead — see
+`CLAUDE.md`'s "Client vs. server actions"). The widget scaffold, loader, and Deluge reference
+sources are now in this repo (see `CLAUDE.md`).

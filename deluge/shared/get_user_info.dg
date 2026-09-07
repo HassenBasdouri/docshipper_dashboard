@@ -1,0 +1,26 @@
+// get_user_info.dg — live name/email lookup for a resolved actor id. Used to attribute
+// compensation emails (see ../actions/send_compensation_emails.dg) to whoever is really acting,
+// instead of a hardcoded name/address.
+//
+// zoho.crm.getRecordById("users", userId) returns a Map with a "users" key holding a one-entry
+// List, the same wrapped shape as the bulk zoho.crm.getRecords("users", ...) call in
+// get_user_id_by_email.dg — confirmed live (reading fields off the raw Map result was wrong; see
+// ../shared/get_user_profile.dg for the same fix).
+//
+// TODO: confirm the exact field names ("full_name" vs "Full_Name" etc.) once tested against a
+// live response.
+//
+// Returns a JSON-stringified Map ({name, email}) — Standalone category functions can only
+// declare return type string (confirmed via a live deploy error on apply_supervision_decision.dg
+// — "Invalid return Type Map. Category standalone returns string"); callers parse the result
+// back with .toMap() immediately at the call site.
+
+string standalone.getUserInfo(String userId)
+{
+	users = zoho.crm.getRecordById("users", userId);
+	user = users.get("users").get(0);
+	info = Map();
+	info.put("name", user.get("full_name"));
+	info.put("email", user.get("email"));
+	return info.toString();
+}

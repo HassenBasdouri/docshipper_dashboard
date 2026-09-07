@@ -49,12 +49,21 @@ async function resolveDigestUrl(userId) {
 
 async function downloadWithFallback(url) {
   const ready = await initZoho();
+  // The local sample files (view-as's local options, or the no-registry-entry-yet fallback
+  // below) are relative paths, not real remote URLs — Zoho's CRM-SDK transports validate `url`
+  // against an absolute-URL pattern and reject a relative one with PATTERN_NOT_MATCHED (a live
+  // error confirmed this), so only attempt them for a genuine http(s) URL; go straight to plain
+  // `fetch()` (same-origin, works for a relative path) otherwise.
+  const isRemoteUrl = /^https?:\/\//i.test(url);
 
-  if (ready && window.ZOHO && window.ZOHO.CRM && window.ZOHO.CRM.CONNECTION) {
+  if (isRemoteUrl && ready && window.ZOHO && window.ZOHO.CRM && window.ZOHO.CRM.CONNECTION) {
     try {
-      const resp = await window.ZOHO.CRM.CONNECTION.invoke("workdrive", {
-        parameters: { method: "GET", url },
-      });
+      // `url` and `method` are top-level keys on the config object, not nested inside
+      // `parameters` (that field is for the target request's own query/body params) — confirmed
+      // by a live REQUIRED_PARAM_MISSING error against the widget SDK reference. Only transport
+      // confirmed to actually work for a WorkDrive download — see extractConnectionText's header
+      // for why the other two (CONNECTOR.invokeAPI, HTTP.get) aren't reliable here.
+      const resp = await window.ZOHO.CRM.CONNECTION.invoke("workdrive_connection", { url, method: "GET" });
       const text = extractConnectionText(resp);
       if (text) return text;
     } catch (_err) {
@@ -62,23 +71,26 @@ async function downloadWithFallback(url) {
     }
   }
 
-  if (ready && window.ZOHO && window.ZOHO.CRM && window.ZOHO.CRM.CONNECTOR) {
+  if (isRemoteUrl && ready && window.ZOHO && window.ZOHO.CRM && window.ZOHO.CRM.CONNECTOR) {
     try {
       const resp = await window.ZOHO.CRM.CONNECTOR.invokeAPI({ url, method: "GET" });
       const text = extractConnectionText(resp);
       if (text) return text;
     } catch (_err) {
-      // fall through to next transport
+      // confirmed live to throw a TypeError inside the SDK itself for this call shape
+      // ("Cannot read properties of undefined (reading 'FILE')") — fall through to next transport
     }
   }
 
-  if (ready && window.ZOHO && window.ZOHO.CRM && window.ZOHO.CRM.HTTP) {
+  if (isRemoteUrl && ready && window.ZOHO && window.ZOHO.CRM && window.ZOHO.CRM.HTTP) {
     try {
       const resp = await window.ZOHO.CRM.HTTP.get({ url });
       if (typeof resp === "string") return resp;
       if (resp && resp.body) return resp.body;
     } catch (_err) {
-      // fall through to next transport
+      // confirmed live to return Zoho's own sign-in page HTML for a WorkDrive URL (no
+      // WorkDrive-specific auth) rather than throwing — the typeof/resp.body checks above just
+      // won't match, falling through to the next transport naturally
     }
   }
 
@@ -93,6 +105,14 @@ function extractConnectionText(resp) {
   if (resp.response_body) return resp.response_body;
   if (resp.body) return resp.body;
   if (resp.content) return resp.content;
+  // CONNECTION.invoke's actual response wraps the downstream call's result under `details`
+  // (confirmed against the widget SDK reference) — check there too before giving up.
+  if (resp.details) return extractConnectionText(resp.details);
+  // Last resort: confirmed live — for a WorkDrive JSON file download, CONNECTION.invoke's
+  // `details` IS the actual file content already parsed into a plain object by the SDK, not
+  // wrapped under any of the field names above. Re-stringify it so callers (which expect a JSON
+  // string to parse themselves) get one back.
+  if (typeof resp === "object") return JSON.stringify(resp);
   return null;
 }
 

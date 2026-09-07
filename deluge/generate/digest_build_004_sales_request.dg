@@ -1,0 +1,56 @@
+// digest_build_004_sales_request.dg — builds the Anthropic Messages API request body for one
+// 004-SALES user's nightly Claude call, WITHOUT making the call. Same split-for-batching reason as
+// ../generate/digest_build_sales_manager_request.dg — see that file's header for the full
+// timeout/Batches-API context. See digest_finish_004_sales.dg for the other half.
+//
+// Returns a JSON-stringified Map (the Anthropic request body) — Standalone category functions can
+// only declare return type string; the caller (generate/digest_generate.dg) parses the result
+// back with .toMap() immediately, since it needs to nest this under a "params" key alongside a
+// "custom_id" for the batch request.
+
+string standalone.digest_build_004_sales_request(String userId, Map collected)
+{
+	MODEL_ID = "claude-haiku-4-5-20251001"; // fastest/cheapest current Claude model — see ../generate/digest_build_sales_manager_request.dg's header for why. Does not accept output_config/effort (confirmed live).
+
+	// Digest_house_rules_004_sales_file_id holds a WorkDrive file id, not the text itself — the
+	// raw doc is too big for a CRM org variable (see ../shared/fetch_workdrive_text.dg).
+	houseRulesFileId = zoho.crm.getOrgVariable("Digest_house_rules_004_sales_file_id");
+	stableSystemPrompt = standalone.fetchWorkdriveText(houseRulesFileId);
+
+	systemBlocks = List();
+	stableBlock = Map();
+	stableBlock.put("type", "text");
+	stableBlock.put("text", stableSystemPrompt);
+	cacheControl = Map();
+	cacheControl.put("type", "ephemeral");
+	stableBlock.put("cache_control", cacheControl);
+	systemBlocks.add(stableBlock);
+
+	personalTasksRows = standalone.buildPersonalTasksRows(collected.get("personal_tasks_deal_ids").toString(), collected.get("personal_tasks_deal_facts")).toJSONList();
+
+	factsForModel = Map();
+	factsForModel.put("personal_tasks", personalTasksRows);
+	factsForModel.put("b2b_lost_own", collected.get("b2b_lost_own_rows"));
+
+	userContent = "Here are today's facts for this sales rep (their own open tasks/calls and "
+		+ "their B2B Lost deals). For each item, write only the requested text and return "
+		+ "ONLY a JSON object, with no surrounding text, matching exactly this schema: "
+		+ "{\"personal_tasks\":[{\"deal_id\":\"\",\"happened\":[],\"proposal\":\"\",\"note\":\"\"}],"
+		+ "\"b2b_lost_own\":[{\"deal_id\":\"\",\"happened\":[],\"proposal\":\"\",\"note\":\"\"}]}"
+		+ " Write all text in English."
+		+ "\n\nToday's facts (JSON):\n" + factsForModel.toString();
+
+	messages = List();
+	userMsg = Map();
+	userMsg.put("role", "user");
+	userMsg.put("content", userContent);
+	messages.add(userMsg);
+
+	requestBody = Map();
+	requestBody.put("model", MODEL_ID);
+	requestBody.put("max_tokens", 8000); // smaller scope than the Sales Manager call — fewer sections, no dispatch/supervision text
+	requestBody.put("system", systemBlocks);
+	requestBody.put("messages", messages);
+
+	return requestBody.toString();
+}

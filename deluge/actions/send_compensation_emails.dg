@@ -1,0 +1,30 @@
+// send_compensation_emails.dg — A4/A7: one compensation email per non-CS tagged person
+// (Important#5 exception for CS simples lives in ../../app/js/config.js
+// requiresCompensationEmail; mirrored here server-side since this is the actual send path).
+// Used by post_note_with_channel_check.dg and digest_send_mention_emails.dg.
+//
+// The send itself goes through sendmentionemail, an already-deployed Deluge Standalone function
+// that sends from zoho.adminuserid and builds its own subject/greeting/link — no per-actor Gmail
+// Connection needed (Deluge's native sendmail can't originate from a real external address the
+// way an earlier draft of this file assumed).
+//
+// Depends on ../shared/get_user_info.dg, extract_tags.dg, sendmentionemail (external, already deployed).
+//
+// Returns an empty string — Standalone category functions can only declare return type string,
+// even ones like this that are pure side effect (no data to hand back to the caller). getUserInfo
+// and extractTags are both parsed back (.toMap()/.toJSONList()) immediately at their call sites.
+
+string standalone.sendCompensationEmails(String dealId, String note, String actingUserId)
+{
+	tags = standalone.extractTags(note).toJSONList();
+	deal = zoho.crm.getRecordById("Deals", dealId); // corrected: zoho.crm.getRecord() isn't a real Deluge task
+	dealName = deal.get("Deal_Name");
+	actor = standalone.getUserInfo(actingUserId).toMap();
+	messageHtml = note.replaceAll("\n", "<br>");
+
+	for each person in tags {
+		if (person.get("is_cs_simple") == true) { continue; } // Important#5 exception
+		standalone.SendMentionEmail(person.get("email"), actor.get("name"), person.get("first_name"), dealName, dealId, messageHtml);
+	}
+	return "";
+}

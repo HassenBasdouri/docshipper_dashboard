@@ -1,0 +1,71 @@
+// collect_own_tasks_calls.dg — a user's own active Tasks/Calls (ONE wide query each, not
+// per-deal) plus the Stage + key fields for every deal they touch (batched by id via
+// searchRecords's `id:in:` criteria, 100 ids per call, not one call per deal). Reused by every
+// profile's collector in ../collect/.
+//
+// TODO before first real run: confirm every module/field name against the live org (taken from
+// the v24.1 policy doc's F. section, verified there on 26/08 — schema may have moved since).
+//
+// Outgoing_Call_Status isn't a searchable field in this org at all — confirmed live
+// ("INVALID_QUERY" / "the field is not available for search"), regardless of operator (an `in`
+// vs. grouped-OR `equals` attempt hit that first). So Calls are fetched by Owner alone and
+// filtered down to Scheduled/Overdue in Deluge instead of in the search criteria.
+//
+// Returns a JSON-stringified Map ({tasks, calls, deal_ids, deal_facts}) — Standalone category
+// functions can only declare return type string; callers parse the result back with .toMap()
+// immediately at the call site.
+
+string standalone.collectOwnTasksCalls(String userId)
+{
+	tasks = zoho.crm.searchRecords("Tasks", "(Owner:equals:" + userId + ")and(Status:equals:Not Started)");
+
+	ownCalls = zoho.crm.searchRecords("Calls", "(Owner:equals:" + userId + ")");
+	calls = List();
+	for each c in ownCalls {
+		status = c.get("Outgoing_Call_Status");
+		if (status == "Scheduled" || status == "Overdue") { calls.add(c); }
+	}
+
+	dealIds = List();
+	for each t in tasks { if (t.get("What_Id") != null) { dealIds.add(t.get("What_Id").get("id")); } }
+	for each c in calls { if (c.get("What_Id") != null) { dealIds.add(c.get("What_Id").get("id")); } }
+	dealIds = dealIds.distinct();
+
+	// Deal facts, batched by id rather than one call per deal (still the point of this whole
+	// function). This used to build a COQL "where id in (...)" string and then never actually use
+	// it — zoho.crm.getRecords("Deals", 1, 200) was called instead, which ignores dealIds
+	// entirely and just returns the first 200 Deals in the module. Fixed here using
+	// searchRecords's `id:in:` criteria (reuses a mechanism already proven working elsewhere in
+	// this file) instead of switching to COQL, since this repo doesn't have a confirmed Deluge
+	// COQL task/invokeurl shape for this org yet — worth revisiting once that's confirmed, since
+	// COQL would let this select only the specific fields needed instead of the full record.
+	// Chunked to 100 ids per call — Zoho's documented cap for the `in` criteria operator. Every
+	// record is trimmed via ../shared/trim_deal_fields.dg before being kept — searchRecords
+	// returns the FULL record (every field on the module), and this Map ends up embedded in the
+	// Claude prompt (often several times over, once per section a deal appears in); an untrimmed
+	// prompt hit Anthropic's 200,000-token context limit live ("prompt is too long: 283138
+	// tokens").
+	dealFacts = Map();
+	chunk = List();
+	for each dealId in dealIds {
+		chunk.add(dealId);
+		if (chunk.size() == 100) {
+			idList = chunk.toString().replaceAll("\\[|\\]", "");
+			dealRows = zoho.crm.searchRecords("Deals", "(id:in:" + idList + ")");
+			for each d in dealRows { dealFacts.put(d.get("id"), standalone.trimDealFields(d).toMap()); }
+			chunk = List();
+		}
+	}
+	if (chunk.size() > 0) {
+		idList = chunk.toString().replaceAll("\\[|\\]", "");
+		dealRows = zoho.crm.searchRecords("Deals", "(id:in:" + idList + ")");
+		for each d in dealRows { dealFacts.put(d.get("id"), standalone.trimDealFields(d).toMap()); }
+	}
+
+	bundle = Map();
+	bundle.put("tasks", tasks);
+	bundle.put("calls", calls);
+	bundle.put("deal_ids", dealIds);
+	bundle.put("deal_facts", dealFacts);
+	return bundle.toString();
+}

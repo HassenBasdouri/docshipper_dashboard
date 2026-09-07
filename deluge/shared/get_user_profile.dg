@@ -1,0 +1,15 @@
+// get_user_profile.dg — live CRM Profile lookup for a user id. Deploy as its own Standalone
+// Deluge function; called from collect/digest_collect.dg's router and from the action-guard
+// functions in ../actions/. Never trust a cached profile — always call this fresh (same
+// "re-check server-side, don't trust yesterday's snapshot" convention this repo applies to
+// owner ids — see ../../CLAUDE.md).
+//
+// zoho.crm.getRecordById("users", userId) returns a Map with a "users" key holding a one-entry
+// List, the same wrapped shape as the bulk zoho.crm.getRecords("users", ...) call in
+// get_user_id_by_email.dg — confirmed live (reading fields off the raw Map result was wrong).
+
+string standalone.getUserProfile(String userId)
+{
+	users = zoho.crm.getRecordById("users", userId);
+	return users.get("users").get(0).get("profile").get("name");
+}

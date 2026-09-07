@@ -1,0 +1,35 @@
+// digest_apply_supervision_batch.dg — widget-invoked Standalone function. Sales-Manager-only.
+// decisions: List of {recordId, module, dealId, decision: "reschedule"|"delete", resumeDate}
+//
+// Depends on ../shared/resolve_actor.dg, ../shared/get_user_profile.dg,
+// apply_supervision_decision.dg.
+//
+// Returns a JSON-stringified Map — Standalone category functions can only declare return type
+// string (and only accept string/int/date/float/bool/map as argument types — not List —
+// confirmed by a live "Invalid Argument Type List" error, the one that surfaced this whole
+// convention). The widget (app/js/actions.js) sends `decisions` pre-stringified via
+// JSON.stringify() rather than as a raw array. applySupervisionDecision already returns string
+// (empty for a skipped row, JSON for an applied one) — results just needs its truthy/count
+// check, so no .toMap() parse is needed here.
+
+string standalone.digest_apply_supervision_batch(String decisionsJson, String viewAsUserId)
+{
+	actingUserId = standalone.resolveActor(viewAsUserId);
+	if (standalone.getUserProfile(actingUserId) != "Sales Manager") {
+		result = Map();
+		result.put("ok", false);
+		result.put("error", "Action restricted to the Sales Manager profile.");
+		return result.toString();
+	}
+
+	decisions = decisionsJson.toJSONList();
+	results = List();
+	for each d in decisions {
+		applied = standalone.applySupervisionDecision(d, actingUserId);
+		if (applied) { results.add(applied); }
+	}
+	result = Map();
+	result.put("ok", true);
+	result.put("applied", results.size());
+	return result.toString();
+}

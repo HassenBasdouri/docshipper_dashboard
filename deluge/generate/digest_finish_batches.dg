@@ -1,0 +1,217 @@
+// digest_finish_batches.dg — nightly step 2, FINISH phase. Needs its OWN new Schedule, separate
+// from generate/digest_generate.dg's (see ../README.md) — a short recurring interval (start with
+// ~15 minutes) that polls whether the pending Anthropic batch submitted by digest_generate.dg has
+// finished, and if so, completes every batched user's digest.
+//
+// If Digest_pending_batch is empty, there's nothing to do (either no batch was submitted, or a
+// previous run already finished and cleared it) — this is expected on most polls, not an error.
+// If a batch IS pending but Anthropic reports it still processing, this logs the status and exits
+// to retry on the next scheduled poll, leaving Digest_pending_batch untouched.
+//
+// Once Anthropic reports the batch "ended": fetches results, downloads the per-user
+// {collected, profile} state generate/digest_generate.dg persisted to WorkDrive
+// (../shared/fetch_workdrive_text.dg, keyed by the state_file_id in Digest_pending_batch), calls
+// digest_finish_sales_manager.dg / digest_finish_004_sales.dg per successful result, updates
+// Digest_registry for those users, and clears Digest_pending_batch so this doesn't reprocess on
+// the next poll.
+//
+// The Batches API's results endpoint returns newline-delimited JSON (one result object per line)
+// with Content-Disposition: attachment — confirmed live that a direct invokeurl call (plain or
+// detailed:true) cannot extract this as text: detailed:true's responseText came back as
+// "utf-8<filename>.jsonl", a fragment of the Content-Disposition header, not file content, and
+// the plain call's .toString() was empty. Confirmed fix: invokeurl's plain (non-detailed) return
+// value for this URL IS a real Deluge File object with the correct bytes — zoho.workdrive.uploadFile
+// accepts it directly (no .toFile(), which converts a String to a File — this is already one), and
+// relaying through WorkDrive (upload as .txt, then ../shared/fetch_workdrive_text.dg to read it
+// back) recovers the content — see ../README.md's deployment-checklist constraints list for the
+// further corruption (raw newlines inside string values) this relay introduces and how it's
+// reconstructed below. Confirmed working end-to-end live: a full submit (digest_generate.dg) →
+// batch → poll → finish → WorkDrive upload → widget fetch has successfully rendered a real
+// digest.
+
+string standalone.digest_finish_batches()
+{
+	pendingBatchRaw = zoho.crm.getOrgVariable("Digest_pending_batch");
+	if (pendingBatchRaw == null || pendingBatchRaw == "" || pendingBatchRaw == "{}") {
+		info "digest_finish_batches: no batch pending, nothing to do.";
+		return "nothing pending";
+	}
+	pendingBatch = pendingBatchRaw.toMap();
+	batchId = pendingBatch.get("batch_id");
+	stateFileId = pendingBatch.get("state_file_id");
+
+	ANTHROPIC_API_KEY = zoho.crm.getOrgVariable("Anthropic_api_key");
+	ANTHROPIC_VERSION = "2023-06-01";
+	headers = Map();
+	headers.put("x-api-key", ANTHROPIC_API_KEY);
+	headers.put("anthropic-version", ANTHROPIC_VERSION);
+
+	statusResp = invokeurl
+	[
+		url: "https://api.anthropic.com/v1/messages/batches/" + batchId
+		type: GET
+		headers: headers
+	];
+
+	processingStatus = statusResp.get("processing_status");
+	if (processingStatus != "ended") {
+		info "digest_finish_batches: batch " + batchId + " still " + processingStatus + " — will check again on the next scheduled poll.";
+		return "still processing: " + processingStatus;
+	}
+
+	resultsUrl = statusResp.get("results_url");
+	if (resultsUrl == null || resultsUrl == "") {
+		info "digest_finish_batches: batch " + batchId + " is ended but results_url is empty.";
+		return "ended but no results_url";
+	}
+
+	// See this file's header for why this goes through a WorkDrive relay instead of reading
+	// resultsResp directly as text.
+	resultsFileRaw = invokeurl
+	[
+		url: resultsUrl
+		type: GET
+		headers: headers
+	];
+
+	// The .txt relay + fetchWorkdriveText's string-conversion path is confirmed live to corrupt
+	// this content: JSON escape sequences INSIDE string values (e.g. the "text" field's own \n's)
+	// come back as literal raw newline bytes, splitting what should be one JSON object per result
+	// into hundreds of fragments — confirmed against Anthropic's own docs, which show plain,
+	// standard-JSONL results with no such corruption at the source, so this is entirely our own
+	// pipeline's doing. .csv + Deluge's confirmed-real `for each` file iteration was tried as an
+	// alternative but fragmented the content into 2 nonsensical pieces (Deluge's CSV parser
+	// doing something opaque with the quotes/commas JSON is full of) — not usable either.
+	//
+	// Fix: reconstruct record boundaries using the literal anchor `{"custom_id":"` (unaffected by
+	// the corruption, since it's outer JSON structure, not inside the corrupted "text" field) via
+	// .toList() on that literal delimiter (regex was tried first for this and rejected — Deluge's
+	// regex engine doesn't accept an escaped "{"). Splitting consumes the anchor from each
+	// fragment, so it's re-prepended below (skipping the first fragment, whatever came before the
+	// first anchor occurrence — expected to be empty). Within each reconstructed chunk, remaining
+	// raw newlines/carriage returns collapse to a space rather than trying to re-escape them back
+	// to \n (real risk of getting double-escaping wrong) — loses literal line-break formatting
+	// inside Claude's note text (cosmetic only) but reliably restores valid JSON.
+	resultsRelayFileName = "digest_batch_results_" + batchId + ".txt";
+	resultsRelayUploadResp = zoho.workdrive.uploadFile(resultsFileRaw, zoho.crm.getOrgVariable("Digest_workdrive_folder_id"), resultsRelayFileName, true, "workdrive_connection");
+	// uploadResp's real shape, confirmed live: {"data":[{"attributes":{"resource_id":...}, ...}]}
+	// — see ../shared/upload_workdrive_json.dg's header for the same fix applied there.
+	resultsRelayFileId = resultsRelayUploadResp.get("data").get(0).get("attributes").get("resource_id");
+
+	resultsText = standalone.fetchWorkdriveText(resultsRelayFileId);
+	if (resultsText == null || resultsText == "") {
+		info "digest_finish_batches: WorkDrive relay for the results file came back empty.";
+		return "results fetch came back empty";
+	}
+
+	recordAnchor = "{\"custom_id\":\"";
+	rawChunks = resultsText.toList(recordAnchor);
+
+	resultLines = List();
+	isFirstChunk = true;
+	for each rawChunk in rawChunks {
+		if (isFirstChunk) { isFirstChunk = false; continue; }
+		chunk = (recordAnchor + rawChunk).trim();
+		if (chunk == null || chunk == "") { continue; }
+		fixed = chunk.replaceAll("\r\n", " ").replaceAll("\r", " ").replaceAll("\n", " ").trim();
+		resultLines.add(fixed);
+	}
+	if (resultLines.size() == 0) {
+		info "digest_finish_batches: no '{\"custom_id\":\"'-anchored chunks found in resultsText — check the anchor format still matches if this happens.";
+		return "no result chunks found";
+	}
+
+	stateByUserRaw = standalone.fetchWorkdriveText(stateFileId);
+	stateByUser = stateByUserRaw.toMap();
+
+	registryRaw = zoho.crm.getOrgVariable("Digest_registry");
+	registry = Map();
+	if (registryRaw != null && registryRaw != "") { registry = registryRaw.toMap(); }
+
+	finished = 0;
+	lineIndex = 0;
+	for each rawLine in resultLines {
+		lineIndex = lineIndex + 1;
+		line = rawLine.trim();
+		// Strip anything before the first "{" — a stray leading character (e.g. a UTF-8 BOM
+		// WorkDrive/Deluge may add when treating content as text) has broken the JSON parse below
+		// live even when the line visually looked like it started with "{".
+		if (line.indexOf("{") > 0) { line = line.replaceAll("^[^{]*", ""); }
+		if (line == null || line == "") { continue; }
+
+		try {
+			result = line.toMap();
+		} catch (parseErr) {
+			info "digest_finish_batches: failed to parse result line " + lineIndex + " of " + resultLines.size() + ": " + parseErr;
+			continue;
+		}
+		customId = result.get("custom_id");
+		resultBody = result.get("result");
+		resultType = resultBody.get("type");
+
+		if (resultType != "succeeded") {
+			// Last-good stays — same as any other per-user failure in this pipeline (see
+			// digest_generate.dg's catch block); expired/errored/canceled results just leave that
+			// user's existing registry entry untouched.
+			info "Batch result for " + customId + " was not successful: " + resultType;
+			continue;
+		}
+
+		try {
+			userState = stateByUser.get(customId);
+			collected = userState.get("collected");
+			profileName = userState.get("profile");
+
+			message = resultBody.get("message");
+			contentBlocks = message.get("content");
+			writtenText = "";
+			for each block in contentBlocks {
+				if (block.get("type") == "text") { writtenText = block.get("text"); }
+			}
+
+			meta = Map();
+			if (profileName == "Sales Manager") {
+				meta = standalone.digest_finish_sales_manager(customId, collected, writtenText).toMap();
+			} else if (profileName == "004-SALES") {
+				meta = standalone.digest_finish_004_sales(customId, collected, writtenText).toMap();
+			}
+
+			oldEntry = registry.get(customId);
+			registry.put(customId, meta);
+			finished = finished + 1;
+			info "Digest published for " + customId + " (" + profileName + "): " + meta.get("url");
+
+			// Self-cleanup: delete the file this entry just replaced, if any — see
+			// ../shared/delete_workdrive_file.dg. The url-equality guard skips a same-day
+			// re-run, where uploadDigest overwrites the same filename in place and the "old"
+			// and "new" urls are identical (nothing to delete).
+			if (oldEntry != null) {
+				oldUrl = oldEntry.get("url");
+				newUrl = meta.get("url");
+				if (oldUrl != null && oldUrl != newUrl) {
+					standalone.deleteWorkdriveFile(oldUrl.getSuffix("/"));
+				}
+			}
+		} catch (e) {
+			info "digest_finish_batches: finishing " + customId + " FAILED: " + e;
+		}
+	}
+
+	registryUpdate = Map();
+	registryUpdate.put("apiname", "Digest_registry");
+	registryUpdate.put("value", registry.toString());
+	zoho.crm.invokeConnector("crm.set", registryUpdate);
+
+	clearBatch = Map();
+	clearBatch.put("apiname", "Digest_pending_batch");
+	clearBatch.put("value", "{}");
+	zoho.crm.invokeConnector("crm.set", clearBatch);
+
+	// Self-cleanup: both files are fully consumed by this point and never referenced again — see
+	// ../shared/delete_workdrive_file.dg.
+	standalone.deleteWorkdriveFile(stateFileId);
+	standalone.deleteWorkdriveFile(resultsRelayFileId);
+
+	info "digest_finish_batches: finished " + finished + " of " + resultLines.size() + " batch results; Digest_pending_batch cleared.";
+	return "ok";
+}

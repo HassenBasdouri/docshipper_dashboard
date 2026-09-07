@@ -1,0 +1,31 @@
+// merge_section.dg — generic left-join: for each row in `collectedRows` (each a Map with an
+// `idField` key), find the matching entry in `writtenRows` (Claude's structured output for that
+// section, or null for profiles/sections with no LLM call) and merge the written fields onto the
+// collected ones. This is the implementation of what the original single-user prototype left as
+// an unimplemented `mergeCollectedAndWritten` TODO. Reused by every profile's generator.
+//
+// Returns a JSON-stringified List — Standalone category functions can only declare return type
+// string (and only accept string/int/date/float/bool/map as argument types — not List —
+// confirmed by a live "Invalid Argument Type List" error); callers pass `.toString()` of their
+// Lists (writtenRowsJson may be null/empty when a section had no LLM output) and parse the
+// result back with `.toJSONList()` immediately at the call site.
+
+string standalone.mergeSection(String collectedRowsJson, String writtenRowsJson, String idField)
+{
+	collectedRows = collectedRowsJson.toJSONList();
+	writtenById = Map();
+	if (writtenRowsJson != null && writtenRowsJson != "") {
+		writtenRows = writtenRowsJson.toJSONList();
+		for each w in writtenRows { writtenById.put(w.get(idField), w); }
+	}
+
+	merged = List();
+	for each c in collectedRows {
+		row = Map();
+		row.putAll(c);
+		written = writtenById.get(c.get(idField));
+		if (written != null) { row.putAll(written); }
+		merged.add(row);
+	}
+	return merged.toString();
+}

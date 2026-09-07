@@ -1,0 +1,30 @@
+// make_section.dg — builds one entry of the digest envelope's `sections` array (see
+// app/js/render.js's SECTION_RENDERERS — `key`/`type`/`title`/`accent` drive which renderer runs
+// and how the lane is labeled/colored; `kind`/`cols` are only used by the section types that
+// need them). Reused by every profile's generator.
+//
+// Returns a JSON-stringified Map — Standalone category functions can only declare return type
+// string (and only accept string/int/date/float/bool/map as argument types — not List or Object
+// — confirmed by a live "Invalid Argument Type List" error). `data` is a Map for some section
+// types (initial-dispatch/initial-info/supervision) and a List for others (card-list/
+// b2b-redispatch/info-table/ghost-table), so callers pass `.toString()` of whichever it is plus a
+// `dataType` discriminator ("map" or "list") telling this function how to parse it back before
+// embedding it — a plain `Object` parameter isn't a valid Standalone argument type either.
+// Callers parse the overall result back with .toMap() immediately at the call site.
+
+string standalone.makeSection(String key, String type, String title, String accent, String dataJson, String dataType, String kind, String colsJson)
+{
+	section = Map();
+	section.put("key", key);
+	section.put("type", type);
+	section.put("title", title);
+	section.put("accent", accent);
+	if (dataType == "list") {
+		section.put("data", dataJson.toJSONList());
+	} else {
+		section.put("data", dataJson.toMap());
+	}
+	if (kind != null && kind != "") { section.put("kind", kind); }
+	if (colsJson != null && colsJson != "") { section.put("cols", colsJson.toJSONList()); }
+	return section.toString();
+}

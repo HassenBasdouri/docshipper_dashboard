@@ -1,0 +1,37 @@
+// digest_generate_stub.dg — fallback generator for any profile without real rules yet.
+//
+// No Claude call — a stub profile only ever shows "Personal Tasks" (the one truly common
+// section), with blank, editable notes (opts.noteOnly:true, matching app/js/render.js's
+// "vigilance"-style read/write-but-no-suggested-text card). Zero LLM cost per stub profile until
+// someone actually writes that profile's house rules and gives it a real
+// digest_collect_<profile>.dg / digest_generate_<profile>.dg pair.
+//
+// Returns a JSON-stringified Map ({url, run_date, profile}, straight from ../shared/upload_digest.dg)
+// — Standalone category functions can only declare return type string; call sites into
+// ../shared/ below parse the result back with .toJSONList()/.toMap() immediately.
+
+string standalone.digest_generate_stub(String userId, Map collected, String profileName)
+{
+	todayStr = collected.get("run_date");
+
+	personalTasksRows = standalone.buildPersonalTasksRows(collected.get("personal_tasks_deal_ids").toString(), collected.get("personal_tasks_deal_facts")).toJSONList();
+
+	sections = List();
+	tasksSection = standalone.makeSection("personal_tasks", "card-list", "Personal Tasks", "info", personalTasksRows.toString(), "list", "personal", null).toMap();
+	opts = Map();
+	opts.put("noteOnly", true);
+	tasksSection.put("opts", opts);
+	sections.add(tasksSection);
+
+	finalDigest = Map();
+	finalDigest.put("run_date", todayStr);
+	finalDigest.put("status", "delivered");
+	finalDigest.put("user_id", userId);
+	finalDigest.put("profile", profileName);
+	finalDigest.put("badge", Map());
+	finalDigest.put("sections", sections);
+	finalDigest.put("method_footer", Map());
+
+	finalDigestJson = finalDigest.toString();
+	return standalone.uploadDigest(userId, finalDigestJson, profileName, todayStr);
+}

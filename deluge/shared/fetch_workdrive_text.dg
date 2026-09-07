@@ -1,0 +1,47 @@
+// fetch_workdrive_text.dg — downloads a WorkDrive file's raw text content by file id (resource_id
+// — see ../shared/upload_workdrive_json.dg's header for that field's confirmed real name/shape).
+//
+// Used to read large text blobs (house-rules docs) that are too big to fit in a CRM org
+// variable — org variables have a real size ceiling well below a several-hundred-line policy
+// doc, hit live while trying to store Digest_house_rules_sales_manager as plain text. The org
+// variable now holds only the short WorkDrive file id (Digest_house_rules_<profile>_file_id);
+// the actual text lives in a WorkDrive .txt file and is fetched fresh here on every
+// digest_generate_<profile>.dg call — this is still cheap relative to the Claude call itself,
+// and the house-rules TEXT (not this fetch) is what Anthropic's cache_control caches across
+// days, so re-fetching daily doesn't undo that savings.
+//
+// Confirmed live, in order, before landing on this version:
+//  - invokeurl GET to download.zoho.com/v1/workdrive/download/<id> with
+//    connection:"workdrive_connection" — 401 (wrong host for this Connection).
+//  - zoho.workdrive.downloadFile(fileId, connection), guessed as a native counterpart to
+//    ../shared/upload_digest.dg's working zoho.workdrive.uploadFile — not a real Deluge task.
+//  - Same GET against www.zohoapis.com/workdrive/api/v1/download/<id> instead — fixes the 401,
+//    but the file was uploaded with a .jsonl extension, which WorkDrive serves back as
+//    content-type: application/x-unknown; invokeurl can't expose that as text (plain call's
+//    .toString() empty, detailed:true's responseText just the filename).
+//  - Tried iterating the response with `for each` (Deluge does support this for File objects) —
+//    real feature, but CSV-only: "'.csv file formats are only supported to iterate.'" Confirms
+//    fileResp genuinely is a Deluge File object, and that Deluge's file-content handling is
+//    keyed off recognized type/extension.
+// Fix: every WorkDrive upload this repo makes for text meant to be read back this way now uses a
+// .txt filename instead of an arbitrary one, so WorkDrive serves it back as text/plain — a
+// content-type invokeurl exposes as plain text through this function's .toString() call below.
+// .json was tried for the pending-batch state (generate/digest_generate.dg — genuinely one valid
+// JSON object, so it seemed like the "correct" label) but hit "Invalid JSON Format String" live
+// on the caller's later .toMap() call, most likely because invokeurl auto-parses an
+// application/json response into a Map internally, and re-serializing that via this function's
+// .toString() then re-parsing again apparently doesn't round-trip cleanly for that content — so
+// every caller now uses .txt uniformly (house-rules docs, pending-batch state, and the
+// batch-results relay in generate/digest_finish_batches.dg, which is genuinely JSONL and was
+// .txt from the start for a related reason: avoiding that same auto-parse path on invalid JSON).
+
+string standalone.fetchWorkdriveText(String fileId)
+{
+	response = invokeurl
+	[
+		url: "https://www.zohoapis.com/workdrive/api/v1/download/" + fileId
+		type: GET
+		connection: "workdrive_connection"
+	];
+	return response.toString();
+}

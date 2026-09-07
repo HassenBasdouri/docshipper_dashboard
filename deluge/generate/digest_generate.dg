@@ -1,0 +1,171 @@
+// digest_generate.dg — nightly step 2, SUBMIT phase (runs immediately after collect/digest_collect.dg).
+//
+// Loops over every active user (Digest_active_users org variable). Stub-profile users finish
+// immediately, same as always — no Claude call needed. Sales Manager / 004-SALES users each get
+// their Anthropic request built (digest_build_sales_manager_request.dg /
+// digest_build_004_sales_request.dg) and added to ONE shared Anthropic Batches API submission
+// instead of each making their own synchronous invokeurl call — a single call generating a full
+// Sales Manager's notes was taking ~52s against Deluge's fixed, non-configurable ~40s invokeurl
+// timeout, confirmed live even after switching to the fastest current model and trimming the
+// prompt. A batch *submission* call is fast regardless of how long generation itself takes, since
+// it doesn't block on it.
+//
+// This only submits the batch and persists enough state to finish later — see
+// generate/digest_finish_batches.dg (a SEPARATE, newly-added Schedule — see ../README.md) for the
+// poll-and-complete half: it checks the batch's status, and once Anthropic reports it done, calls
+// digest_finish_sales_manager.dg / digest_finish_004_sales.dg per result and updates
+// Digest_registry for those users. Digest_registry is updated here too, but only for the
+// stub-profile users this phase finishes synchronously.
+//
+// Pending-batch state (the Anthropic batch id + every batched user's collected facts + profile,
+// keyed by userId) is too big for a CRM org variable the same way the house-rules docs were, so
+// it's uploaded to WorkDrive (../shared/upload_workdrive_json.dg) and only the resulting
+// {batch_id, state_file_id} pair — both short strings — goes into the new Digest_pending_batch org
+// variable. Known simplification: if this phase runs again while a previous batch is still
+// pending (digest_finish_batches.dg never ran or never saw it complete), it skips submitting a
+// new batch and logs a warning rather than building retry/expiry handling — investigate
+// Digest_pending_batch manually if that happens.
+//
+// Each user's profile is re-fetched live here (never trusted from a cached value) before
+// branching — same "never trust yesterday's snapshot" convention this repo already applies to
+// owner ids (see ../../CLAUDE.md's "Conventions" section).
+//
+// TODO before first real run: store the Anthropic API key as a secure custom variable /
+// Connection rather than inline; confirm invokeurl is allowed to api.anthropic.com on this org
+// (Zoho's "Allowed URLs" allowlist may need updating); confirm the Batches API endpoint/response
+// shape below against a live response — solid but not yet live-confirmed for this integration.
+
+string standalone.digest_generate()
+{
+	pendingBatchRaw = zoho.crm.getOrgVariable("Digest_pending_batch");
+	if (pendingBatchRaw != null && pendingBatchRaw != "" && pendingBatchRaw != "{}") {
+		info "digest_generate: a batch is already pending (" + pendingBatchRaw + ") — skipping submission this run. Check generate/digest_finish_batches.dg's schedule is running, or clear Digest_pending_batch manually if that batch is stuck.";
+		return "skipped — batch already pending";
+	}
+
+	activeUsersRaw = zoho.crm.getOrgVariable("Digest_active_users"); // hand-maintained JSON array [{id, name}]
+	activeUsers = activeUsersRaw.toJSONList();
+
+	registryRaw = zoho.crm.getOrgVariable("Digest_registry");
+	registry = Map();
+	if (registryRaw != null && registryRaw != "") { registry = registryRaw.toMap(); }
+
+	batchRequests = List();
+	stateByUser = Map();
+
+	for each activeUser in activeUsers {
+		userId = activeUser.get("id");
+		profileName = standalone.getUserProfile(userId); // live lookup, never cached
+
+		try {
+			collected = standalone.digest_collect(userId).toMap();
+
+			if (profileName == "Sales Manager") {
+				requestParams = standalone.digest_build_sales_manager_request(userId, collected).toMap();
+				batchReq = Map();
+				batchReq.put("custom_id", userId);
+				batchReq.put("params", requestParams);
+				batchRequests.add(batchReq);
+				userState = Map();
+				userState.put("collected", collected);
+				userState.put("profile", profileName);
+				stateByUser.put(userId, userState);
+			} else if (profileName == "004-SALES") {
+				requestParams = standalone.digest_build_004_sales_request(userId, collected).toMap();
+				batchReq = Map();
+				batchReq.put("custom_id", userId);
+				batchReq.put("params", requestParams);
+				batchRequests.add(batchReq);
+				userState = Map();
+				userState.put("collected", collected);
+				userState.put("profile", profileName);
+				stateByUser.put(userId, userState);
+			} else {
+				meta = standalone.digest_generate_stub(userId, collected, profileName).toMap();
+				oldEntry = registry.get(userId);
+				registry.put(userId, meta);
+				info "Digest published for " + userId + " (" + profileName + "): " + meta.get("url");
+
+				// Self-cleanup: delete the file this entry just replaced, if any — see
+				// ../shared/delete_workdrive_file.dg. The url-equality guard skips a same-day
+				// re-run, where uploadDigest overwrites the same filename in place and the "old"
+				// and "new" urls are identical (nothing to delete).
+				if (oldEntry != null) {
+					oldUrl = oldEntry.get("url");
+					newUrl = meta.get("url");
+					if (oldUrl != null && oldUrl != newUrl) {
+						standalone.deleteWorkdriveFile(oldUrl.getSuffix("/"));
+					}
+				}
+			}
+		} catch (e) {
+			// Last-good stays: on failure, leave this user's existing registry entry untouched rather
+			// than clobbering it with nothing — matches the widget's own staleness-banner design
+			// (app/js/digestLoader.js's isStale), which already handles a digest that's a day old.
+			info "Digest collect/build FAILED for " + userId + " (" + profileName + "): " + e;
+		}
+	}
+
+	if (batchRequests.size() > 0) {
+		ANTHROPIC_API_KEY = zoho.crm.getOrgVariable("Anthropic_api_key");
+		ANTHROPIC_VERSION = "2023-06-01";
+
+		batchBody = Map();
+		batchBody.put("requests", batchRequests);
+
+		headers = Map();
+		headers.put("x-api-key", ANTHROPIC_API_KEY);
+		headers.put("anthropic-version", ANTHROPIC_VERSION);
+		headers.put("content-type", "application/json");
+		// MCP connector beta — only Sales Manager's request body actually sets mcp_servers/tools
+		// (see digest_build_sales_manager_request.dg); harmless on the 004-SALES/stub requests
+		// batched alongside it, which don't.
+		headers.put("anthropic-beta", "mcp-client-2025-11-20");
+
+		batchResp = invokeurl
+		[
+			url: "https://api.anthropic.com/v1/messages/batches"
+			type: POST
+			parameters: batchBody.toString()
+			headers: headers
+		];
+		info batchResp;
+
+		batchId = batchResp.get("id");
+
+		todayStr = zoho.currentdate.toString("yyyy-MM-dd");
+		// .txt, not .json — .json was tried first (this content is one genuinely valid JSON
+		// object, so it seemed like the "correct" label) but hit "Invalid JSON Format String" live
+		// on the read-back .toMap() call, likely because invokeurl auto-parses an
+		// application/json response into a Map internally, and re-serializing that via
+		// fetchWorkdriveText's .toString() then re-parsing again apparently doesn't round-trip
+		// cleanly for this content. .txt sidesteps that auto-parse path entirely — same mechanism
+		// already confirmed working for the batch-results relay in digest_finish_batches.dg (which
+		// is genuinely JSONL, not one JSON document, and was .txt from the start for a related
+		// reason: avoiding invokeurl trying to auto-parse invalid JSON).
+		stateFileName = "digest_pending_batch_" + todayStr + ".txt";
+		stateFileId = standalone.uploadWorkdriveJson(stateByUser.toString(), stateFileName);
+
+		pendingBatch = Map();
+		pendingBatch.put("batch_id", batchId);
+		pendingBatch.put("state_file_id", stateFileId);
+		pendingBatchUpdate = Map();
+		pendingBatchUpdate.put("apiname", "Digest_pending_batch");
+		pendingBatchUpdate.put("value", pendingBatch.toString());
+		zoho.crm.invokeConnector("crm.set", pendingBatchUpdate);
+
+		info "Submitted Anthropic batch " + batchId + " for " + batchRequests.size() + " users.";
+	} else {
+		info "No Sales Manager / 004-SALES users to batch this run.";
+	}
+
+	// zoho.crm.updateOrgVariable() is not a real Deluge task — updating an org variable goes through
+	// the generic connector task instead:
+	registryUpdate = Map();
+	registryUpdate.put("apiname", "Digest_registry");
+	registryUpdate.put("value", registry.toString());
+	zoho.crm.invokeConnector("crm.set", registryUpdate);
+
+	info "Digest_registry updated for " + activeUsers.size() + " active users (stub profiles only this phase — batched profiles finish via digest_finish_batches.dg).";
+	return "ok";
+}
